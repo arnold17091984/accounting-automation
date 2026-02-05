@@ -1,0 +1,466 @@
+{
+  "name": "02 - Credit Card Statement Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "credit-card-upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "[Trigger] - File Upload Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "webhookId": "credit-card-upload"
+    },
+    {
+      "parameters": {
+        "updates": ["message"]
+      },
+      "id": "telegram-trigger",
+      "name": "[Trigger] - Telegram File Upload",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "has-document",
+              "leftValue": "={{ $json.message.document }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-file",
+      "name": "[Check] - Has Document?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [200, 200]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "fileId": "={{ $json.message.document.file_id }}"
+      },
+      "id": "download-telegram-file",
+      "name": "[Telegram] - Download File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [400, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Detect file type and bank\nconst filename = $input.first().json.message?.document?.file_name || $input.first().json.filename || 'unknown';\nconst fileExt = filename.split('.').pop().toLowerCase();\nconst content = $input.first().binary?.data ? Buffer.from($input.first().binary.data.data, 'base64').toString() : '';\n\n// Detect bank from filename or content\nlet bank = 'unknown';\nconst contentLower = (content + filename).toLowerCase();\n\nif (contentLower.includes('unionbank') || contentLower.includes('ubp')) {\n  bank = 'unionbank';\n} else if (contentLower.includes('bdo') || contentLower.includes('banco de oro')) {\n  bank = 'bdo';\n} else if (contentLower.includes('gcash') || contentLower.includes('g-xchange')) {\n  bank = 'gcash';\n} else if (contentLower.includes('metrobank') || contentLower.includes('mbtc')) {\n  bank = 'metrobank';\n} else if (contentLower.includes('bpi')) {\n  bank = 'bpi';\n}\n\nreturn [{\n  json: {\n    filename,\n    fileType: fileExt,\n    bank,\n    chatId: $input.first().json.message?.chat?.id,\n    userId: $input.first().json.message?.from?.id,\n    timestamp: new Date().toISOString()\n  },\n  binary: $input.first().binary\n}];"
+      },
+      "id": "detect-format",
+      "name": "[Detect] - File Format & Bank",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "is-pdf",
+              "leftValue": "={{ $json.fileType }}",
+              "rightValue": "pdf",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-file-type",
+      "name": "[Check] - CSV or PDF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [800, 100]
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/accounting-automation/python && python -c \"\nimport sys\nimport json\nfrom card_processor.csv_parsers import detect_and_parse\n\ncontent = sys.stdin.read()\nresult = detect_and_parse(content)\nprint(json.dumps({\n    'bank': result.bank,\n    'transactions': [{\n        'date': t.date.isoformat(),\n        'description': t.description,\n        'merchant': t.merchant,\n        'amount': float(t.amount),\n        'reference': t.reference\n    } for t in result.transactions],\n    'transaction_count': result.transaction_count,\n    'errors': result.errors,\n    'warnings': result.warnings\n}))\n\" << 'CSVEOF'\n{{ $binary.data.data | base64Decode }}\nCSVEOF"
+      },
+      "id": "parse-csv",
+      "name": "[Python] - Parse CSV",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/accounting-automation/python && python -c \"\nimport sys\nimport json\nimport base64\nfrom card_processor.pdf_extractor import PDFExtractor\n\npdf_data = base64.b64decode(sys.argv[1])\nextractor = PDFExtractor()\nresult = extractor.extract_from_bytes(pdf_data)\n\nprint(json.dumps({\n    'bank': result.bank_name,\n    'transactions': [{\n        'date': t.date.isoformat(),\n        'description': t.description,\n        'merchant': t.merchant,\n        'amount': float(t.amount),\n        'reference': t.reference\n    } for t in result.transactions],\n    'transaction_count': len(result.transactions),\n    'confidence': result.extraction_confidence,\n    'errors': result.errors,\n    'notes': result.notes\n}))\n\" '{{ $binary.data.data }}'"
+      },
+      "id": "parse-pdf",
+      "name": "[Python] - Parse PDF (Claude Vision)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge parse results and prepare for classification\nconst input = $input.first().json;\nlet parseResult;\n\ntry {\n  parseResult = JSON.parse(input.stdout || '{}');\n} catch (e) {\n  return [{ json: { error: 'Failed to parse result', raw: input } }];\n}\n\nif (parseResult.errors && parseResult.errors.length > 0) {\n  return [{ json: { error: parseResult.errors.join('; '), parseResult } }];\n}\n\nconst transactions = parseResult.transactions || [];\n\nreturn [{\n  json: {\n    bank: parseResult.bank,\n    transactions: transactions,\n    transactionCount: transactions.length,\n    confidence: parseResult.confidence || 1.0,\n    warnings: parseResult.warnings || parseResult.notes || []\n  }\n}];"
+      },
+      "id": "process-parse-result",
+      "name": "[Process] - Parse Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "has-transactions",
+              "leftValue": "={{ $json.transactionCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-transactions",
+      "name": "[Check] - Has Transactions?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1400, 100]
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/accounting-automation/python && python -c \"\nimport sys\nimport json\nfrom card_processor import DuplicateDetector\nfrom card_processor.csv_parsers.base import ParsedTransaction\nfrom datetime import datetime\nfrom decimal import Decimal\n\ndata = json.loads(sys.argv[1])\n\n# Convert to ParsedTransaction objects\ntransactions = []\nfor t in data['transactions']:\n    txn = ParsedTransaction(\n        date=datetime.fromisoformat(t['date']),\n        description=t.get('description', ''),\n        merchant=t.get('merchant', ''),\n        amount=Decimal(str(t.get('amount', 0))),\n        reference=t.get('reference')\n    )\n    transactions.append(txn)\n\n# Check for duplicates\ndetector = DuplicateDetector()\nresult = detector.check_batch(transactions)\n\nprint(json.dumps({\n    'unique': [{\n        'date': t.date.isoformat(),\n        'description': t.description,\n        'merchant': t.merchant,\n        'amount': float(t.amount),\n        'reference': t.reference\n    } for t in result.unique_transactions],\n    'duplicates': len(result.definite_duplicates) + len(result.potential_duplicates),\n    'stats': result.stats\n}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "check-duplicates",
+      "name": "[Python] - Check Duplicates",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1600, 0]
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/accounting-automation/python && python -c \"\nimport sys\nimport json\nfrom card_processor import TransactionCategorizer\nfrom card_processor.csv_parsers.base import ParsedTransaction\nfrom datetime import datetime\nfrom decimal import Decimal\n\ndata = json.loads(sys.argv[1])\nentity = sys.argv[2] if len(sys.argv) > 2 else None\n\n# Convert to ParsedTransaction objects\ntransactions = []\nfor t in data['unique']:\n    txn = ParsedTransaction(\n        date=datetime.fromisoformat(t['date']),\n        description=t.get('description', ''),\n        merchant=t.get('merchant', ''),\n        amount=Decimal(str(t.get('amount', 0))),\n        reference=t.get('reference')\n    )\n    transactions.append(txn)\n\n# Categorize\ncategorizer = TransactionCategorizer(use_claude=True)\nresult = categorizer.classify_batch(transactions, entity=entity)\n\n# Format output\nclassified = []\nfor ct in result.classified:\n    classified.append({\n        'date': ct.transaction.date.isoformat(),\n        'description': ct.transaction.description,\n        'merchant': ct.transaction.merchant,\n        'amount': float(ct.transaction.amount),\n        'reference': ct.transaction.reference,\n        'account_code': ct.classification.account_code if ct.classification else None,\n        'account_name': ct.classification.account_name if ct.classification else None,\n        'category': ct.classification.category if ct.classification else None,\n        'confidence': ct.classification.confidence if ct.classification else 0,\n        'method': ct.classification.method if ct.classification else None,\n        'anomaly': ct.classification.anomaly if ct.classification else False,\n        'anomaly_reason': ct.classification.anomaly_reason if ct.classification else None\n    })\n\nprint(json.dumps({\n    'classified': classified,\n    'unclassified_count': len(result.unclassified),\n    'stats': result.stats\n}))\n\" '{{ JSON.stringify($json) }}' '{{ $json.entity || \"\" }}'"
+      },
+      "id": "categorize-transactions",
+      "name": "[Python] - Categorize with Claude",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1800, 0]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "transactions",
+        "columns": "source,source_bank,entity,txn_date,description,merchant,amount,account_code,account_name,category,classification_method,classification_confidence,anomaly_flag,anomaly_reason",
+        "options": {
+          "onConflict": "doNothing"
+        }
+      },
+      "id": "save-transactions",
+      "name": "[DB] - Save Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [2000, 0],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Detect Format').first().json.chatId }}",
+        "text": "=✅ *Credit Card Statement Processed*\n\n📄 File: {{ $('Detect Format').first().json.filename }}\n🏦 Bank: {{ $('Detect Format').first().json.bank | upper }}\n📊 Transactions: {{ $json.stats.classified || 0 }} classified\n🔍 Duplicates: {{ $json.stats.duplicates || 0 }} skipped\n\n{{ $json.stats.by_lookup ? '• By lookup: ' + $json.stats.by_lookup : '' }}\n{{ $json.stats.by_claude ? '• By AI: ' + $json.stats.by_claude : '' }}\n\n_Transactions saved to database_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-success",
+      "name": "[Telegram] - Success Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [2200, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "file_uploads",
+        "columns": "filename,file_type,source_bank,processed,transaction_count",
+        "options": {}
+      },
+      "id": "log-upload",
+      "name": "[DB] - Log File Upload",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [2200, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Detect Format').first().json.chatId }}",
+        "text": "=❌ *Processing Failed*\n\n📄 File: {{ $('Detect Format').first().json.filename }}\n❗ Error: {{ $json.error || 'Unknown error' }}\n\nPlease check the file format and try again.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-error",
+      "name": "[Telegram] - Error Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1600, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, transactions: $json.stats }) }}"
+      },
+      "id": "respond-webhook",
+      "name": "[Response] - Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2400, 0]
+    }
+  ],
+  "connections": {
+    "[Trigger] - File Upload Webhook": {
+      "main": [
+        [
+          {
+            "node": "[Detect] - File Format & Bank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Trigger] - Telegram File Upload": {
+      "main": [
+        [
+          {
+            "node": "[Check] - Has Document?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Check] - Has Document?": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Telegram] - Download File": {
+      "main": [
+        [
+          {
+            "node": "[Detect] - File Format & Bank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Detect] - File Format & Bank": {
+      "main": [
+        [
+          {
+            "node": "[Check] - CSV or PDF?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Check] - CSV or PDF?": {
+      "main": [
+        [
+          {
+            "node": "[Python] - Parse PDF (Claude Vision)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[Python] - Parse CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Parse CSV": {
+      "main": [
+        [
+          {
+            "node": "[Process] - Parse Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Parse PDF (Claude Vision)": {
+      "main": [
+        [
+          {
+            "node": "[Process] - Parse Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Process] - Parse Results": {
+      "main": [
+        [
+          {
+            "node": "[Check] - Has Transactions?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Check] - Has Transactions?": {
+      "main": [
+        [
+          {
+            "node": "[Python] - Check Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[Telegram] - Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Check Duplicates": {
+      "main": [
+        [
+          {
+            "node": "[Python] - Categorize with Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Categorize with Claude": {
+      "main": [
+        [
+          {
+            "node": "[DB] - Save Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] - Save Transactions": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Success Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[DB] - Log File Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Telegram] - Success Notification": {
+      "main": [
+        [
+          {
+            "node": "[Response] - Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "credit-card",
+      "name": "Credit Card"
+    },
+    {
+      "id": "ingestion",
+      "name": "Ingestion"
+    }
+  ],
+  "triggerCount": 2,
+  "updatedAt": "2025-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

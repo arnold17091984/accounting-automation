@@ -1,0 +1,596 @@
+{
+  "name": "08 - Telegram Command Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [250, 400],
+      "webhookId": "telegram-bot",
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Receives all Telegram messages and callbacks"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message ? 'message' : $json.callback_query ? 'callback' : $json.message?.document ? 'document' : 'unknown' }}",
+              "operation": "equals",
+              "value2": "message"
+            }
+          ]
+        }
+      },
+      "id": "switch-message-type",
+      "name": "Switch - Message Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [500, 400],
+      "notes": "Route by message type"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message?.text?.startsWith('/') }}",
+              "operation": "equals",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "if-command",
+      "name": "IF - Is Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [750, 300],
+      "notes": "Check if message is a command"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom telegram import BotCommandHandler\n\ndata = json.loads(sys.argv[1])\ntext = data['message']['text']\nuser_id = data['message']['from']['id']\n\n# Parse command and args\nparts = text.split()\ncommand = parts[0].lower()\nargs = parts[1:] if len(parts) > 1 else []\n\nhandler = BotCommandHandler('/opt/accounting-automation/config')\nresult = handler.handle_command(command, args, user_id)\n\nprint(json.dumps({\n    'success': result.success,\n    'message': result.message,\n    'keyboard': result.keyboard,\n    'parse_mode': result.parse_mode,\n    'data': result.data,\n    'chat_id': data['message']['chat']['id']\n}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-handle-command",
+      "name": "Python - Handle Command",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 200],
+      "notes": "Process bot command"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "={{ $json.parse_mode }}",
+          "replyMarkup": "={{ $json.keyboard }}"
+        }
+      },
+      "id": "telegram-send-response",
+      "name": "Telegram - Send Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1250, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send command response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.data?.action }}",
+              "operation": "equals",
+              "value2": "generate_report"
+            }
+          ]
+        }
+      },
+      "id": "if-generate-report",
+      "name": "IF - Generate Report",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1500, 200],
+      "notes": "Check if report generation requested"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -m pl_generator.excel_builder --entity {{ $json.data.entity }} --month {{ $json.data.period }} --output-dir /tmp/reports/"
+      },
+      "id": "python-generate-report",
+      "name": "Python - Generate Report",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1750, 100],
+      "notes": "Generate requested report"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "📄 {{ $json.data.report_type.toUpperCase() }} Report - {{ $json.data.entity.toUpperCase() }} ({{ $json.data.period }})"
+        }
+      },
+      "id": "telegram-send-document",
+      "name": "Telegram - Send Document",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2000, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send generated report"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom telegram import ApprovalHandler\n\ndata = json.loads(sys.argv[1])\ncallback_data = data['callback_query']['data']\nuser_id = data['callback_query']['from']['id']\nmessage_id = data['callback_query']['message']['message_id']\nchat_id = data['callback_query']['message']['chat']['id']\n\nhandler = ApprovalHandler('/opt/accounting-automation/config')\nresult = handler.handle_callback(callback_data, user_id)\n\nprint(json.dumps({\n    'success': result.success,\n    'message': result.message,\n    'action': result.action,\n    'request_id': result.request_id,\n    'message_id': message_id,\n    'chat_id': chat_id\n}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-handle-callback",
+      "name": "Python - Handle Callback",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [750, 500],
+      "notes": "Process inline keyboard callback"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "messageId": "={{ $json.message_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-update-callback",
+      "name": "Telegram - Update Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1000, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Update message with callback result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message?.document }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "if-document",
+      "name": "IF - Is Document",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [750, 700],
+      "notes": "Check if message contains document"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom telegram import FileHandler\n\ndata = json.loads(sys.argv[1])\nuser_id = data['message']['from']['id']\nfile_name = data['message']['document']['file_name']\nfile_size = data['message']['document']['file_size']\n\nhandler = FileHandler('/opt/accounting-automation/config')\n\n# Validate file\nis_valid, error = handler.validate_file(file_name, file_size)\nif not is_valid:\n    print(json.dumps({'success': False, 'message': error}))\nelse:\n    # Check permission\n    if not handler.can_upload(user_id):\n        print(json.dumps({'success': False, 'message': 'You do not have permission to upload files.'}))\n    else:\n        keyboard = handler.get_upload_keyboard(user_id)\n        print(json.dumps({\n            'success': True,\n            'message': '📁 *File Received*\\\\n\\\\nSelect the entity for this file:',\n            'keyboard': keyboard,\n            'file_id': data['message']['document']['file_id'],\n            'file_name': file_name\n        }))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-validate-file",
+      "name": "Python - Validate File",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 700],
+      "notes": "Validate uploaded file"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-file-valid",
+      "name": "IF - File Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 700],
+      "notes": "Check if file is valid"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "replyMarkup": "={{ $json.keyboard }}"
+        }
+      },
+      "id": "telegram-file-response",
+      "name": "Telegram - File Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send entity selection keyboard"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "❌ {{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-file-error",
+      "name": "Telegram - File Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 800],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send file error message"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.callback_query?.data?.startsWith('upload_entity_') }}",
+              "operation": "equals",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "if-upload-entity",
+      "name": "IF - Upload Entity Selection",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 900],
+      "notes": "Check if callback is entity selection for upload"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.file_id }}"
+      },
+      "id": "telegram-download-file",
+      "name": "Telegram - Download File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1250, 900],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Download the uploaded file"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nimport base64\nfrom pathlib import Path\nfrom telegram import FileHandler\n\ndata = json.loads(sys.argv[1])\nuser_id = data['user_id']\nentity = data['entity']\nfile_name = data['file_name']\nfile_content = base64.b64decode(data['file_content'])\n\nhandler = FileHandler('/opt/accounting-automation/config')\n\n# Save and process file\nfile_path = handler.save_upload(\n    file_id=data['file_id'],\n    file_name=file_name,\n    content=file_content,\n    user_id=user_id,\n    entity=entity\n)\n\nresult = handler.process_file(file_path, user_id, entity)\n\nprint(json.dumps({\n    'success': result.success,\n    'message': result.message,\n    'transactions_found': result.transactions_found,\n    'transactions_processed': result.transactions_processed,\n    'duplicates_skipped': result.duplicates_skipped\n}))\n\" '{{ JSON.stringify({user_id: $json.user_id, entity: $json.entity, file_name: $json.file_name, file_id: $json.file_id, file_content: $binary.data.data}) }}'"
+      },
+      "id": "python-process-file",
+      "name": "Python - Process File",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1500, 900],
+      "notes": "Process uploaded file"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-process-result",
+      "name": "Telegram - Process Result",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1750, 900],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send processing result"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, entity, details, status)\nVALUES (\n  'telegram_command',\n  '{{ $json.data?.entity || \"system\" }}',\n  '{{ JSON.stringify({command: $json.command, user_id: $json.user_id}) }}',\n  'success'\n)",
+        "options": {}
+      },
+      "id": "db-audit-command",
+      "name": "DB - Audit Command",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1500, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Log command to audit trail"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "❌ *Telegram Handler Error*\n\nError: {{ $json.error?.message }}\nTime: {{ new Date().toISOString() }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-error",
+      "name": "Telegram - Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 1100],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notify admin on error"
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Switch - Message Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Message Type": {
+      "main": [
+        [
+          {
+            "node": "IF - Is Command",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Python - Handle Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Command": {
+      "main": [
+        [
+          {
+            "node": "Python - Handle Command",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF - Is Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Handle Command": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send Response": {
+      "main": [
+        [
+          {
+            "node": "IF - Generate Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Audit Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Python - Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Python - Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Handle Callback": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Update Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF - Upload Entity Selection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Document": {
+      "main": [
+        [
+          {
+            "node": "Python - Validate File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Python - Validate File": {
+      "main": [
+        [
+          {
+            "node": "IF - File Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - File Valid": {
+      "main": [
+        [
+          {
+            "node": "Telegram - File Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - File Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Upload Entity Selection": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Download File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Telegram - Download File": {
+      "main": [
+        [
+          {
+            "node": "Python - Process File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Process File": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Process Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "Asia/Manila"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "telegram",
+      "id": "7"
+    },
+    {
+      "name": "commands",
+      "id": "8"
+    }
+  ],
+  "triggerCount": 1,
+  "pinData": {},
+  "versionId": "1"
+}

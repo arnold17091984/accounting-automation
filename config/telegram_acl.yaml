@@ -1,0 +1,289 @@
+# =============================================================================
+# Telegram Access Control List (ACL)
+# =============================================================================
+# Defines user permissions for Telegram bot commands and approvals
+# =============================================================================
+
+metadata:
+  version: "1.0"
+  last_updated: "2025-01-01"
+  bot_name: "BK Accounting Bot"
+  default_deny: true  # Deny access to unlisted users
+
+# -----------------------------------------------------------------------------
+# User Definitions
+# -----------------------------------------------------------------------------
+# Replace Telegram IDs with actual user IDs from Telegram
+users:
+  - telegram_id: 123456789  # Replace with actual ID
+    name: "Koki"
+    role: admin
+    entities: all
+    notifications:
+      - alerts
+      - daily_summary
+      - weekly_summary
+      - errors
+
+  - telegram_id: 234567890  # Replace with actual ID
+    name: "Jeremy"
+    role: accounting_manager
+    entities: all
+    notifications:
+      - alerts
+      - daily_summary
+      - weekly_summary
+
+  - telegram_id: 345678901  # Replace with actual ID
+    name: "Accounting Officer 1"
+    role: officer
+    entities:
+      - solaire
+      - cod
+      - royce
+    notifications:
+      - daily_summary
+
+  - telegram_id: 456789012  # Replace with actual ID
+    name: "Accounting Officer 2"
+    role: officer
+    entities:
+      - manila_junket
+      - tours
+      - midori
+    notifications:
+      - daily_summary
+
+  - telegram_id: 567890123  # Replace with actual ID
+    name: "Management"
+    role: viewer
+    entities: all
+    notifications:
+      - weekly_summary
+
+# -----------------------------------------------------------------------------
+# Role Permissions
+# -----------------------------------------------------------------------------
+permissions:
+  admin:
+    description: "Full system access"
+    commands:
+      - "*"  # All commands
+    actions:
+      - approve_any
+      - reject_any
+      - upload
+      - view_all
+      - report_generate
+      - budget_edit
+      - budget_override
+      - config_edit
+      - system_status
+      - audit_view
+    approval_limit: unlimited
+    can_approve_own: true
+
+  accounting_manager:
+    description: "Accounting team lead"
+    commands:
+      - /budget
+      - /pl
+      - /cash
+      - /pending
+      - /status
+      - /report
+      - /upload
+      - /help
+    actions:
+      - approve
+      - reject
+      - upload
+      - view_all
+      - report_generate
+      - budget_edit
+    approval_limit: 500000  # ₱500,000 PHP
+    can_approve_own: false
+
+  officer:
+    description: "Accounting staff"
+    commands:
+      - /budget
+      - /pl
+      - /cash
+      - /pending
+      - /status
+      - /report
+      - /upload
+      - /help
+    actions:
+      - approve_under_10k
+      - upload
+      - view_assigned
+      - report_generate
+    approval_limit: 10000  # ₱10,000 PHP
+    can_approve_own: false
+    restricted_to_entities: true
+
+  viewer:
+    description: "View-only access with override approval"
+    commands:
+      - /budget
+      - /pl
+      - /cash
+      - /status
+      - /report
+      - /help
+    actions:
+      - view_all
+      - report_generate
+      - approve_override  # Can override to approve any amount
+    approval_limit: 0  # Cannot normally approve
+    override_approval: true
+    can_approve_own: false
+
+# -----------------------------------------------------------------------------
+# Command Definitions
+# -----------------------------------------------------------------------------
+commands:
+  /budget:
+    description: "View budget status"
+    usage: "/budget [entity] [account]"
+    examples:
+      - "/budget"
+      - "/budget solaire"
+      - "/budget solaire 6230"
+    min_role: viewer
+
+  /pl:
+    description: "View P&L summary"
+    usage: "/pl [entity] [period]"
+    examples:
+      - "/pl"
+      - "/pl solaire"
+      - "/pl solaire 2025-01"
+    min_role: viewer
+
+  /cash:
+    description: "View cash position"
+    usage: "/cash [entity]"
+    examples:
+      - "/cash"
+      - "/cash midori"
+    min_role: viewer
+
+  /pending:
+    description: "View pending approvals"
+    usage: "/pending [type]"
+    examples:
+      - "/pending"
+      - "/pending expense"
+      - "/pending transfer"
+    min_role: officer
+
+  /status:
+    description: "System health check"
+    usage: "/status"
+    min_role: viewer
+
+  /report:
+    description: "Generate or request report"
+    usage: "/report [type] [entity] [period]"
+    examples:
+      - "/report daily"
+      - "/report monthly solaire 2025-01"
+    min_role: viewer
+
+  /upload:
+    description: "Upload file for processing"
+    usage: "Send file as attachment"
+    min_role: officer
+
+  /help:
+    description: "Show available commands"
+    usage: "/help [command]"
+    min_role: viewer
+
+  /config:
+    description: "View or edit configuration"
+    usage: "/config [setting] [value]"
+    min_role: admin
+
+  /audit:
+    description: "View audit logs"
+    usage: "/audit [filter]"
+    min_role: admin
+
+# -----------------------------------------------------------------------------
+# Group Chat Settings
+# -----------------------------------------------------------------------------
+group_chats:
+  - chat_id: -1001234567890  # Replace with actual group chat ID
+    name: "BK Accounting Team"
+    type: main
+    allow_commands: true
+    notifications:
+      - daily_summary
+      - alerts
+      - budget_warnings
+
+  - chat_id: -1009876543210  # Replace with actual group chat ID
+    name: "BK Management"
+    type: management
+    allow_commands: true
+    notifications:
+      - weekly_summary
+      - critical_alerts
+
+# -----------------------------------------------------------------------------
+# Approval Flow Settings
+# -----------------------------------------------------------------------------
+approval_flow:
+  expense:
+    amounts:
+      - max: 10000
+        approvers: [officer, accounting_manager, admin]
+        auto_approve: true
+        conditions:
+          - budget_available
+          - has_receipt
+      - max: 50000
+        approvers: [accounting_manager, admin]
+        auto_approve: false
+      - max: 500000
+        approvers: [admin]
+        auto_approve: false
+      - above: 500000
+        approvers: [admin]
+        require_override: true
+        notify: [management]
+
+  transfer:
+    # Bank transfers always require explicit approval
+    auto_approve: false
+    approvers: [accounting_manager, admin]
+    require_confirmation: true
+    notify: [admin]
+
+  budget_override:
+    approvers: [admin]
+    require_justification: true
+    notify: [accounting_manager]
+
+# -----------------------------------------------------------------------------
+# Rate Limits
+# -----------------------------------------------------------------------------
+rate_limits:
+  commands_per_minute: 10
+  uploads_per_hour: 20
+  approval_actions_per_minute: 5
+  report_requests_per_hour: 5
+
+# -----------------------------------------------------------------------------
+# Security Settings
+# -----------------------------------------------------------------------------
+security:
+  require_registered_users: true
+  log_all_commands: true
+  log_file_uploads: true
+  sensitive_data_masking: true
+  session_timeout_minutes: 480  # 8 hours

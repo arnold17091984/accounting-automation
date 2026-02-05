@@ -1,0 +1,378 @@
+{
+  "name": "09 - Daily & Weekly Reports",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 18 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "daily-trigger",
+      "name": "[Trigger] - Daily 6:30 PM (Mon-Fri)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "weekly-trigger",
+      "name": "[Trigger] - Weekly Monday 9 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine report type based on trigger\nconst triggerNode = $executionId ? 'daily' : 'weekly';\nconst now = new Date();\nconst today = now.toISOString().split('T')[0];\n\n// Get date range based on report type\nlet startDate, endDate, reportType;\n\nif ($input.first().$node.name.includes('Daily')) {\n  reportType = 'daily';\n  startDate = today;\n  endDate = today;\n} else {\n  reportType = 'weekly';\n  const lastWeek = new Date(now);\n  lastWeek.setDate(lastWeek.getDate() - 7);\n  startDate = lastWeek.toISOString().split('T')[0];\n  endDate = today;\n}\n\nconst entities = ['solaire', 'cod', 'royce', 'manila_junket', 'tours', 'midori'];\n\nreturn [{\n  json: {\n    reportType,\n    startDate,\n    endDate,\n    entities,\n    generatedAt: now.toISOString()\n  }\n}];"
+      },
+      "id": "setup-report",
+      "name": "[Setup] - Report Parameters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  entity,\n  category,\n  COUNT(*) as transaction_count,\n  SUM(amount) as total_amount,\n  AVG(amount) as avg_amount\nFROM transactions\nWHERE txn_date BETWEEN '{{ $json.startDate }}' AND '{{ $json.endDate }}'\nGROUP BY entity, category\nORDER BY entity, total_amount DESC",
+        "options": {}
+      },
+      "id": "fetch-transactions",
+      "name": "[DB] - Fetch Period Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [450, 100],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  t.entity,\n  t.account_code,\n  t.account_name,\n  SUM(t.amount) as actual_amount,\n  b.budget_amount,\n  ROUND((SUM(t.amount) / NULLIF(b.budget_amount, 0)) * 100, 1) as utilization_pct\nFROM transactions t\nLEFT JOIN budgets b ON \n  t.entity = b.entity AND \n  t.account_code = b.account_code AND\n  b.year = EXTRACT(YEAR FROM CURRENT_DATE) AND\n  b.month = EXTRACT(MONTH FROM CURRENT_DATE)\nWHERE t.txn_date >= DATE_TRUNC('month', CURRENT_DATE)\nGROUP BY t.entity, t.account_code, t.account_name, b.budget_amount\nHAVING b.budget_amount > 0\nORDER BY utilization_pct DESC NULLS LAST\nLIMIT 20",
+        "options": {}
+      },
+      "id": "fetch-budget-status",
+      "name": "[DB] - Fetch Budget Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [450, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  entity,\n  description,\n  merchant,\n  amount,\n  anomaly_reason\nFROM transactions\nWHERE txn_date BETWEEN '{{ $json.startDate }}' AND '{{ $json.endDate }}'\n  AND anomaly_flag = TRUE\nORDER BY amount DESC\nLIMIT 10",
+        "options": {}
+      },
+      "id": "fetch-anomalies",
+      "name": "[DB] - Fetch Anomalies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [450, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile report data from all sources\nconst reportParams = $('Setup Report').first().json;\nconst transactions = $('Fetch Transactions').all();\nconst budgetStatus = $('Fetch Budget Status').all();\nconst anomalies = $('Fetch Anomalies').all();\n\n// Aggregate by entity\nconst entitySummary = {};\nfor (const row of transactions) {\n  const entity = row.json.entity;\n  if (!entitySummary[entity]) {\n    entitySummary[entity] = {\n      total_transactions: 0,\n      total_amount: 0,\n      by_category: {}\n    };\n  }\n  entitySummary[entity].total_transactions += parseInt(row.json.transaction_count);\n  entitySummary[entity].total_amount += parseFloat(row.json.total_amount);\n  entitySummary[entity].by_category[row.json.category] = parseFloat(row.json.total_amount);\n}\n\n// Find budget warnings\nconst budgetWarnings = budgetStatus\n  .filter(b => parseFloat(b.json.utilization_pct) > 70)\n  .map(b => ({\n    entity: b.json.entity,\n    account: b.json.account_name,\n    utilization: b.json.utilization_pct,\n    actual: b.json.actual_amount,\n    budget: b.json.budget_amount\n  }));\n\n// Format anomalies\nconst formattedAnomalies = anomalies.map(a => ({\n  entity: a.json.entity,\n  description: a.json.description,\n  amount: a.json.amount,\n  reason: a.json.anomaly_reason\n}));\n\n// Calculate totals\nlet grandTotal = 0;\nlet totalTransactions = 0;\nfor (const entity of Object.values(entitySummary)) {\n  grandTotal += entity.total_amount;\n  totalTransactions += entity.total_transactions;\n}\n\nreturn [{\n  json: {\n    ...reportParams,\n    entitySummary,\n    budgetWarnings,\n    anomalies: formattedAnomalies,\n    grandTotal,\n    totalTransactions\n  }\n}];"
+      },
+      "id": "compile-report",
+      "name": "[Compile] - Build Report Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "is-daily",
+              "leftValue": "={{ $json.reportType }}",
+              "rightValue": "daily",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-report-type",
+      "name": "[Check] - Daily or Weekly?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format daily report for Telegram\nconst data = $input.first().json;\n\nlet message = `📊 *Daily Financial Summary*\\n`;\nmessage += `📅 ${data.startDate}\\n\\n`;\n\nmessage += `💰 *Total Spending: ₱${data.grandTotal.toLocaleString()}*\\n`;\nmessage += `📝 Transactions: ${data.totalTransactions}\\n\\n`;\n\n// Entity breakdown\nmessage += `*By Entity:*\\n`;\nfor (const [entity, summary] of Object.entries(data.entitySummary)) {\n  message += `• ${entity}: ₱${summary.total_amount.toLocaleString()} (${summary.total_transactions} txns)\\n`;\n}\n\n// Budget warnings\nif (data.budgetWarnings.length > 0) {\n  message += `\\n⚠️ *Budget Warnings:*\\n`;\n  for (const warning of data.budgetWarnings.slice(0, 5)) {\n    const emoji = warning.utilization > 90 ? '🔴' : '🟡';\n    message += `${emoji} ${warning.entity} - ${warning.account}: ${warning.utilization}%\\n`;\n  }\n}\n\n// Anomalies\nif (data.anomalies.length > 0) {\n  message += `\\n🔍 *Flagged Transactions:*\\n`;\n  for (const anomaly of data.anomalies.slice(0, 3)) {\n    message += `• ${anomaly.entity}: ${anomaly.description} (₱${anomaly.amount.toLocaleString()})\\n`;\n  }\n}\n\nmessage += `\\n_Generated: ${new Date().toLocaleString('en-PH')}_`;\n\nreturn [{ json: { message, chatId: $env.TELEGRAM_GROUP_CHAT_ID } }];"
+      },
+      "id": "format-daily",
+      "name": "[Format] - Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format weekly report for Telegram\nconst data = $input.first().json;\n\nlet message = `📈 *Weekly Financial Report*\\n`;\nmessage += `📅 ${data.startDate} to ${data.endDate}\\n\\n`;\n\nmessage += `💰 *Total Spending: ₱${data.grandTotal.toLocaleString()}*\\n`;\nmessage += `📝 Total Transactions: ${data.totalTransactions}\\n\\n`;\n\n// Entity breakdown with categories\nmessage += `*Breakdown by Entity:*\\n`;\nfor (const [entity, summary] of Object.entries(data.entitySummary)) {\n  message += `\\n*${entity.toUpperCase()}*\\n`;\n  message += `  Total: ₱${summary.total_amount.toLocaleString()}\\n`;\n  \n  // Top categories\n  const categories = Object.entries(summary.by_category)\n    .sort((a, b) => b[1] - a[1])\n    .slice(0, 3);\n  for (const [cat, amt] of categories) {\n    message += `  • ${cat}: ₱${amt.toLocaleString()}\\n`;\n  }\n}\n\n// Budget summary\nmessage += `\\n📊 *MTD Budget Status:*\\n`;\nconst criticalBudgets = data.budgetWarnings.filter(w => w.utilization > 90);\nconst warningBudgets = data.budgetWarnings.filter(w => w.utilization > 70 && w.utilization <= 90);\n\nmessage += `🔴 Critical (>90%): ${criticalBudgets.length}\\n`;\nmessage += `🟡 Warning (>70%): ${warningBudgets.length}\\n`;\n\nif (criticalBudgets.length > 0) {\n  message += `\\n*Critical Items:*\\n`;\n  for (const item of criticalBudgets.slice(0, 5)) {\n    message += `• ${item.entity}/${item.account}: ${item.utilization}%\\n`;\n  }\n}\n\n// Anomalies summary\nif (data.anomalies.length > 0) {\n  message += `\\n🔍 *${data.anomalies.length} Transactions Flagged*\\n`;\n  message += `_Review pending approvals with /pending_\\n`;\n}\n\nmessage += `\\n_Use /pl [entity] for detailed P&L_`;\n\nreturn [{ json: { message, chatId: $env.TELEGRAM_GROUP_CHAT_ID } }];"
+      },
+      "id": "format-weekly",
+      "name": "[Format] - Weekly Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-telegram",
+      "name": "[Telegram] - Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1300, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "audit_log",
+        "columns": "action,workflow,details,status",
+        "options": {}
+      },
+      "id": "audit-log",
+      "name": "[DB] - Write Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [1500, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "=🔴 *Report Generation Error*\\n\\nWorkflow: Daily/Weekly Reports\\nError: {{ $json.error || 'Unknown error' }}\\n\\nPlease check n8n logs.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "error-notify",
+      "name": "[Telegram] - Error Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1300, 450],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "[Trigger] - Daily 6:30 PM (Mon-Fri)": {
+      "main": [
+        [
+          {
+            "node": "[Setup] - Report Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Trigger] - Weekly Monday 9 AM": {
+      "main": [
+        [
+          {
+            "node": "[Setup] - Report Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Setup] - Report Parameters": {
+      "main": [
+        [
+          {
+            "node": "[DB] - Fetch Period Transactions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[DB] - Fetch Budget Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[DB] - Fetch Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] - Fetch Period Transactions": {
+      "main": [
+        [
+          {
+            "node": "[Compile] - Build Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] - Fetch Budget Status": {
+      "main": [
+        [
+          {
+            "node": "[Compile] - Build Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] - Fetch Anomalies": {
+      "main": [
+        [
+          {
+            "node": "[Compile] - Build Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Compile] - Build Report Data": {
+      "main": [
+        [
+          {
+            "node": "[Check] - Daily or Weekly?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Check] - Daily or Weekly?": {
+      "main": [
+        [
+          {
+            "node": "[Format] - Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[Format] - Weekly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Format] - Daily Report": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Format] - Weekly Report": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Telegram] - Send Report": {
+      "main": [
+        [
+          {
+            "node": "[DB] - Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "daily",
+      "name": "Daily"
+    },
+    {
+      "id": "weekly",
+      "name": "Weekly"
+    },
+    {
+      "id": "reports",
+      "name": "Reports"
+    }
+  ],
+  "triggerCount": 2,
+  "updatedAt": "2025-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

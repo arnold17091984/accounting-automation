@@ -1,0 +1,571 @@
+{
+  "name": "03 - Budget Variance Monitor",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook - New Transaction",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "budget-variance-check",
+      "notes": "Triggered by new transaction insertion"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily",
+      "name": "Cron - Daily 6PM Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "notes": "Daily comprehensive budget check"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.trigger_type }}",
+              "operation": "equals",
+              "value2": "webhook"
+            }
+          ]
+        }
+      },
+      "id": "switch-trigger-type",
+      "name": "Switch - Trigger Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [500, 400],
+      "notes": "Route based on trigger source"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  t.entity,\n  t.account_code,\n  t.account_name,\n  t.category,\n  SUM(t.amount) as actual_amount,\n  b.budget_amount,\n  ROUND((SUM(t.amount) / NULLIF(b.budget_amount, 0) * 100)::numeric, 2) as utilization_pct\nFROM transactions t\nJOIN budgets b ON \n  t.entity = b.entity AND \n  t.account_code = b.account_code AND\n  b.year = EXTRACT(YEAR FROM t.txn_date) AND\n  b.month = EXTRACT(MONTH FROM t.txn_date)\nWHERE \n  t.entity = '{{ $json.entity }}' AND\n  EXTRACT(YEAR FROM t.txn_date) = EXTRACT(YEAR FROM CURRENT_DATE) AND\n  EXTRACT(MONTH FROM t.txn_date) = EXTRACT(MONTH FROM CURRENT_DATE)\nGROUP BY t.entity, t.account_code, t.account_name, t.category, b.budget_amount\nORDER BY utilization_pct DESC",
+        "options": {}
+      },
+      "id": "db-single-entity",
+      "name": "DB - Get Single Entity Variance",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [750, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Query variance for triggered entity"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  t.entity,\n  t.account_code,\n  t.account_name,\n  t.category,\n  SUM(t.amount) as actual_amount,\n  b.budget_amount,\n  ROUND((SUM(t.amount) / NULLIF(b.budget_amount, 0) * 100)::numeric, 2) as utilization_pct\nFROM transactions t\nJOIN budgets b ON \n  t.entity = b.entity AND \n  t.account_code = b.account_code AND\n  b.year = EXTRACT(YEAR FROM t.txn_date) AND\n  b.month = EXTRACT(MONTH FROM t.txn_date)\nWHERE \n  EXTRACT(YEAR FROM t.txn_date) = EXTRACT(YEAR FROM CURRENT_DATE) AND\n  EXTRACT(MONTH FROM t.txn_date) = EXTRACT(MONTH FROM CURRENT_DATE)\nGROUP BY t.entity, t.account_code, t.account_name, t.category, b.budget_amount\nHAVING SUM(t.amount) / NULLIF(b.budget_amount, 0) * 100 >= 70\nORDER BY t.entity, utilization_pct DESC",
+        "options": {}
+      },
+      "id": "db-all-entities",
+      "name": "DB - Get All Entities Variance",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [750, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Daily query for all entities with alerts"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom budget import ThresholdChecker, VarianceItem\nfrom decimal import Decimal\nfrom datetime import datetime\n\ndata = json.loads(sys.argv[1])\nchecker = ThresholdChecker('/opt/accounting-automation/config')\n\nalerts = []\nfor item in data:\n    variance_item = VarianceItem(\n        entity=item['entity'],\n        account_code=item['account_code'],\n        account_name=item['account_name'],\n        category=item.get('category', ''),\n        budget_amount=Decimal(str(item['budget_amount'])),\n        actual_amount=Decimal(str(item['actual_amount'])),\n        period=datetime.now().strftime('%Y-%m')\n    )\n    alert = checker.check_variance(variance_item)\n    if alert:\n        alerts.append(alert.to_dict())\n\nprint(json.dumps({'alerts': alerts, 'total_checked': len(data)}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-threshold-check",
+      "name": "Python - Check Thresholds",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 400],
+      "notes": "Run Python threshold checker"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.alerts.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-has-alerts",
+      "name": "IF - Has Alerts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 400],
+      "notes": "Check if any thresholds breached"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom budget import BudgetReportGenerator, ThresholdAlert\nfrom decimal import Decimal\nfrom datetime import datetime\n\ndata = json.loads(sys.argv[1])\ngenerator = BudgetReportGenerator()\n\nalerts = []\nfor a in data['alerts']:\n    alert = ThresholdAlert(\n        entity=a['entity'],\n        account_code=a['account_code'],\n        account_name=a['account_name'],\n        threshold_type=a['threshold_type'],\n        threshold_percent=a['threshold_percent'],\n        actual_percent=a['actual_percent'],\n        actual_amount=Decimal(str(a['actual_amount'])),\n        budget_amount=Decimal(str(a['budget_amount'])),\n        triggered_at=datetime.fromisoformat(a['triggered_at']),\n        message=a.get('message', '')\n    )\n    alerts.append(alert)\n\nmessage = generator.format_alerts_for_telegram(alerts)\nprint(json.dumps({'message': message, 'alert_count': len(alerts)}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-format-alerts",
+      "name": "Python - Format Alerts",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1500, 300],
+      "notes": "Format alerts for Telegram"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO budget_alerts (\n  entity,\n  account_code,\n  year,\n  month,\n  threshold_pct,\n  actual_amount,\n  budget_amount,\n  actual_pct\n) VALUES {{ $json.alerts.map(a => `('${a.entity}', '${a.account_code}', EXTRACT(YEAR FROM CURRENT_DATE), EXTRACT(MONTH FROM CURRENT_DATE), ${a.threshold_percent}, ${a.actual_amount}, ${a.budget_amount}, ${a.actual_percent})`).join(', ') }}\nON CONFLICT DO NOTHING\nRETURNING id",
+        "options": {}
+      },
+      "id": "db-log-alerts",
+      "name": "DB - Log Alerts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1500, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Record alerts to database"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-send-alert",
+      "name": "Telegram - Send Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1750, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send alert to admin"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.alerts.filter(a => a.severity === 'high').length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-critical-alerts",
+      "name": "IF - Has Critical Alerts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1750, 500],
+      "notes": "Check for critical (over budget) alerts"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS }}",
+        "text": "🚨 *CRITICAL BUDGET ALERT*\n\nThe following accounts have EXCEEDED their budget:\n\n{{ $json.alerts.filter(a => a.severity === 'high').map(a => `• ${a.entity.toUpperCase()} - ${a.account_name}: ${a.actual_percent.toFixed(1)}% (₱${a.actual_amount.toLocaleString()} / ₱${a.budget_amount.toLocaleString()})`).join('\\n') }}\n\n⚠️ Immediate review required.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-critical-alert",
+      "name": "Telegram - Critical Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2000, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send critical alert to all admins"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, workflow, entity, details, status)\nVALUES (\n  'budget_variance_check',\n  '03-budget-variance-monitor',\n  '{{ $json.entity || \"all\" }}',\n  '{{ JSON.stringify({alerts_count: $json.alert_count || 0, trigger: $json.trigger_type || \"cron\"}) }}',\n  'success'\n)",
+        "options": {}
+      },
+      "id": "db-audit-log",
+      "name": "DB - Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2000, 600],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Log workflow execution"
+    },
+    {
+      "parameters": {},
+      "id": "merge-triggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [500, 400],
+      "notes": "Combine webhook and cron triggers"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "trigger_type",
+              "value": "webhook"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-webhook-type",
+      "name": "Set - Webhook Type",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [400, 300],
+      "notes": "Mark as webhook trigger"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "trigger_type",
+              "value": "cron"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-cron-type",
+      "name": "Set - Cron Type",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [400, 500],
+      "notes": "Mark as cron trigger"
+    },
+    {
+      "parameters": {
+        "errorMessage": "Budget variance check failed"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1250, 600],
+      "notes": "Handle errors"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "❌ *Budget Variance Monitor Error*\n\nWorkflow: 03-budget-variance-monitor\nError: {{ $json.error.message }}\nTime: {{ new Date().toISOString() }}\n\nPlease check n8n logs for details.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-error-notify",
+      "name": "Telegram - Error Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notify admin on error"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom budget import BudgetReportGenerator, VarianceCalculator, VarianceItem\nfrom decimal import Decimal\nfrom datetime import datetime\n\ndata = json.loads(sys.argv[1])\ncalculator = VarianceCalculator('/opt/accounting-automation/config')\ngenerator = BudgetReportGenerator()\n\nitems = []\nfor item in data:\n    vi = VarianceItem(\n        entity=item['entity'],\n        account_code=item['account_code'],\n        account_name=item['account_name'],\n        category=item.get('category', ''),\n        budget_amount=Decimal(str(item['budget_amount'])),\n        actual_amount=Decimal(str(item['actual_amount'])),\n        period=datetime.now().strftime('%Y-%m')\n    )\n    items.append(vi)\n\nreport = calculator.create_report(items, datetime.now().strftime('%Y-%m'))\nmessage = generator.format_variance_for_telegram(report, include_all=False, max_items=15)\n\nprint(json.dumps({\n    'message': message,\n    'summary': report.summary,\n    'item_count': len(items)\n}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-daily-summary",
+      "name": "Python - Generate Daily Summary",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 600],
+      "notes": "Generate daily budget summary report"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-daily-summary",
+      "name": "Telegram - Daily Summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1250, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send daily budget summary"
+    }
+  ],
+  "connections": {
+    "Webhook - New Transaction": {
+      "main": [
+        [
+          {
+            "node": "Set - Webhook Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cron - Daily 6PM Check": {
+      "main": [
+        [
+          {
+            "node": "Set - Cron Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Webhook Type": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Cron Type": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Triggers": {
+      "main": [
+        [
+          {
+            "node": "Switch - Trigger Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Trigger Type": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Single Entity Variance",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Get All Entities Variance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Single Entity Variance": {
+      "main": [
+        [
+          {
+            "node": "Python - Check Thresholds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get All Entities Variance": {
+      "main": [
+        [
+          {
+            "node": "Python - Check Thresholds",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Python - Generate Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Check Thresholds": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Alerts": {
+      "main": [
+        [
+          {
+            "node": "Python - Format Alerts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Log Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Format Alerts": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Log Alerts": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Critical Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Critical Alerts": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Critical Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Critical Alert": {
+      "main": [
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Generate Daily Summary": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "Asia/Manila"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "budget",
+      "id": "3"
+    },
+    {
+      "name": "monitoring",
+      "id": "4"
+    }
+  ],
+  "triggerCount": 2,
+  "pinData": {},
+  "versionId": "1"
+}

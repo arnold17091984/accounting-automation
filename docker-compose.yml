@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: accounting-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-0.0.0.0}
+      - N8N_PORT=${N8N_PORT:-5678}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-https}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - GENERIC_TIMEZONE=Asia/Manila
+      - TZ=Asia/Manila
+      # Database
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-accounting_automation}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-accounting}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      # Executions
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./python:/opt/accounting-automation/python:ro
+      - ./config:/opt/accounting-automation/config:ro
+      - ./prompts:/opt/accounting-automation/prompts:ro
+      - /tmp/accounting-output:/tmp/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - accounting-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: accounting-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-accounting_automation}
+      - POSTGRES_USER=${POSTGRES_USER:-accounting}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./sql/seed_merchants.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-accounting} -d ${POSTGRES_DB:-accounting_automation}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - accounting-network
+
+  python-runner:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    container_name: accounting-python
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-accounting_automation}
+      - POSTGRES_USER=${POSTGRES_USER:-accounting}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-5-20250929}
+    volumes:
+      - ./python:/app
+      - ./config:/app/config:ro
+      - ./prompts:/app/prompts:ro
+      - /tmp/accounting-output:/tmp/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - accounting-network
+    command: ["tail", "-f", "/dev/null"]  # Keep container running for n8n to exec into
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: accounting-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-accounting_automation}
+      - POSTGRES_USER=${POSTGRES_USER:-accounting}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-5-20250929}
+      - TELEGRAM_ACL_PATH=/app/config/telegram_acl.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - accounting-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: accounting-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      - api
+    networks:
+      - accounting-network
+
+volumes:
+  n8n_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  accounting-network:
+    driver: bridge

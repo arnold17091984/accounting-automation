@@ -1,0 +1,281 @@
+# =============================================================================
+# Fund Request Configuration
+# =============================================================================
+# Defines categories, schedules, and formatting for fund request generation
+# =============================================================================
+
+metadata:
+  version: "1.0"
+  last_updated: "2026-02-05"
+  default_currency: PHP
+
+# -----------------------------------------------------------------------------
+# Payment Schedule
+# -----------------------------------------------------------------------------
+payment_schedule:
+  # Fund requests are generated before these payment dates
+  payment_dates:
+    - day: 5    # 1st half of month
+      label: "1st Half"
+      generate_days_before: 2  # Generate on 3rd
+    - day: 20   # 2nd half of month
+      label: "2nd Half"
+      generate_days_before: 2  # Generate on 18th
+
+  # Reminder schedule
+  reminders:
+    - days_before: 2
+      message: "Fund request due in 2 days"
+    - days_before: 1
+      message: "Fund request due tomorrow"
+
+# -----------------------------------------------------------------------------
+# Section Definitions
+# -----------------------------------------------------------------------------
+sections:
+  A:
+    name: "Regular Expenses"
+    description: "Fixed recurring expenses (rent, salaries, utilities, etc.)"
+    categories:
+      - code: rental
+        name: "Office Rental"
+        frequency: ["monthly", "quarterly"]
+        typical_vendors: ["BGC Office", "Makati Office"]
+
+      - code: legal
+        name: "Legal/Consultancy Services"
+        frequency: ["monthly"]
+        typical_vendors: []
+
+      - code: credit_card
+        name: "Credit Card"
+        frequency: ["monthly"]
+        source: "credit_card_statements"
+
+      - code: salaries
+        name: "Salaries"
+        frequency: ["semi-monthly"]
+        source: "payroll_system"
+
+      - code: fund_replenishment
+        name: "Funds Replenishment"
+        frequency: ["as_needed"]
+        description: "Petty cash and operational fund replenishment"
+
+      - code: housing_allowance
+        name: "Housing Allowance"
+        frequency: ["monthly"]
+        source: "payroll_system"
+
+      - code: network
+        name: "Network Infrastructure"
+        frequency: ["monthly"]
+        typical_vendors: ["PLDT", "Globe", "Converge"]
+
+      - code: bir_tax
+        name: "BIR Tax"
+        frequency: ["monthly"]
+        subcategories:
+          - "1601C - Withholding Tax on Compensation"
+          - "1601E - Withholding Tax Expanded"
+          - "2551Q - Quarterly VAT"
+          - "0619E - Monthly Remittance"
+
+      - code: government
+        name: "Government Contributions"
+        frequency: ["monthly"]
+        subcategories:
+          - "Philhealth"
+          - "Pag-ibig"
+          - "SSS"
+
+      - code: utilities
+        name: "Utilities"
+        frequency: ["monthly"]
+        typical_vendors: ["Meralco", "Manila Water"]
+
+      - code: subscription
+        name: "Subscriptions"
+        frequency: ["monthly", "annual"]
+        typical_vendors: ["Microsoft 365", "Google Workspace", "Slack"]
+
+  B:
+    name: "Others"
+    description: "One-time or irregular expenses"
+    categories:
+      - code: consultation
+        name: "Consultation Fee"
+        frequency: ["as_needed"]
+
+      - code: er_share
+        name: "ER Share"
+        frequency: ["as_needed"]
+        description: "Employer share for transferred employees"
+
+      - code: equipment
+        name: "Equipment Purchase"
+        frequency: ["as_needed"]
+
+      - code: travel
+        name: "Travel & Transportation"
+        frequency: ["as_needed"]
+
+      - code: marketing
+        name: "Marketing & Promotions"
+        frequency: ["as_needed"]
+
+      - code: repairs
+        name: "Repairs & Maintenance"
+        frequency: ["as_needed"]
+
+      - code: other
+        name: "Other Expenses"
+        frequency: ["as_needed"]
+
+# -----------------------------------------------------------------------------
+# Reference Info Section (Project Expenses)
+# -----------------------------------------------------------------------------
+reference_info:
+  enabled: true
+  section_title: "Reference Information (for Kent-san)"
+  includes:
+    - current_fund_balance
+    - project_expenses
+    - remaining_fund
+
+  # Default project list (can be customized per entity)
+  default_projects:
+    - "B-Ticket"
+    - "Daimasu"
+    - "MIDORI"
+    - "PH Topics"
+
+# -----------------------------------------------------------------------------
+# Entity-Specific Overrides
+# -----------------------------------------------------------------------------
+entity_overrides:
+  tours:
+    section_title: "Betrnk Tours FUND REQUEST"
+    projects:
+      - "B-Ticket"
+      - "Daimasu"
+      - "MIDORI"
+      - "PH Topics"
+    reference_recipient: "Kent-san"
+
+  solaire:
+    section_title: "Solaire FUND REQUEST"
+    projects: []
+
+  cod:
+    section_title: "COD FUND REQUEST"
+    projects: []
+
+  midori:
+    section_title: "Midori no Mart FUND REQUEST"
+    projects: []
+
+# -----------------------------------------------------------------------------
+# Excel Template Settings
+# -----------------------------------------------------------------------------
+excel_template:
+  filename_pattern: "{entity}_FundRequest_{date}.xlsx"
+  sheet_name: "Fund Request"
+
+  styles:
+    header:
+      font: "Arial"
+      font_size: 14
+      bold: true
+      fill_color: "FFFF00"  # Yellow highlight
+
+    section_header:
+      font: "Arial"
+      font_size: 11
+      bold: true
+      fill_color: "D9E1F2"  # Light blue
+
+    total_row:
+      font: "Arial"
+      font_size: 11
+      bold: true
+      fill_color: "FFFF00"  # Yellow highlight
+
+    currency_format: '#,##0.00'
+    date_format: "MMMM D, YYYY"
+
+  columns:
+    A: { width: 5, header: "#" }
+    B: { width: 40, header: "Description" }
+    C: { width: 15, header: "Amount (PHP)" }
+    D: { width: 15, header: "Amount (USD)" }
+    E: { width: 20, header: "Notes" }
+
+# -----------------------------------------------------------------------------
+# Approval Settings
+# -----------------------------------------------------------------------------
+approval:
+  auto_approve_threshold: 0  # No auto-approval for fund requests
+  required_approvers:
+    - role: "accounting_manager"
+      min_count: 1
+    - role: "admin"
+      min_count: 1
+      for_amounts_above: 1000000  # 1M PHP
+
+  telegram_buttons:
+    - label: "Approve"
+      callback: "approve_fund_request"
+      emoji: true
+
+    - label: "Reject"
+      callback: "reject_fund_request"
+      emoji: true
+
+    - label: "Request Changes"
+      callback: "request_changes"
+      emoji: false
+
+# -----------------------------------------------------------------------------
+# Notifications
+# -----------------------------------------------------------------------------
+notifications:
+  telegram:
+    # Chat IDs to notify (from telegram_acl.yaml)
+    notify_groups:
+      - type: "accounting_team"
+        on: ["created", "approved", "rejected"]
+      - type: "management"
+        on: ["approved"]
+
+    message_template: |
+      Fund Request - {entity}
+      Payment Date: {payment_date}
+
+      Section A (Regular): {section_a_total}
+      Section B (Others): {section_b_total}
+      TOTAL: {overall_total}
+
+      Current Balance: {current_fund_balance}
+      Remaining: {remaining_fund}
+
+# -----------------------------------------------------------------------------
+# Validation Rules
+# -----------------------------------------------------------------------------
+validation:
+  required_fields:
+    - entity
+    - payment_date
+    - section_a_total or section_b_total  # At least one section must have items
+
+  amount_limits:
+    min_item_amount: 0.01
+    max_item_amount: 100000000  # 100M PHP
+    max_total_amount: 500000000  # 500M PHP
+
+  warnings:
+    - condition: "overall_total > current_fund_balance * 2"
+      message: "Total request exceeds 2x current fund balance"
+
+    - condition: "section_b_total > section_a_total"
+      message: "One-time expenses exceed regular expenses"

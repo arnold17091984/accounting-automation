@@ -1,0 +1,531 @@
+{
+  "name": "07 - Tax Filing Support",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-monthly",
+      "name": "Cron - Monthly Tax Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "1st of month - check monthly tax obligations"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 1,4,7,10 *"
+            }
+          ]
+        }
+      },
+      "id": "cron-quarterly",
+      "name": "Cron - Quarterly Tax Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "notes": "1st of Jan/Apr/Jul/Oct - quarterly tax check"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tax-compute",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-manual",
+      "name": "Webhook - Manual Compute",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 700],
+      "webhookId": "tax-compute-manual",
+      "notes": "Manual tax computation trigger"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "trigger_type",
+              "value": "monthly"
+            },
+            {
+              "name": "period",
+              "value": "={{ new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0,7) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-monthly-period",
+      "name": "Set - Monthly Period",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "notes": "Set previous month as period"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "trigger_type",
+              "value": "quarterly"
+            },
+            {
+              "name": "period",
+              "value": "={{ (() => { const d = new Date(); const q = Math.floor((d.getMonth()-1)/3); const y = q < 0 ? d.getFullYear()-1 : d.getFullYear(); return `${y}-Q${(q+4)%4+1}`; })() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-quarterly-period",
+      "name": "Set - Quarterly Period",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [500, 500],
+      "notes": "Set previous quarter as period"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  entity,\n  SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END) as gross_sales,\n  SUM(CASE WHEN category = 'revenue' AND account_code NOT LIKE '42%' THEN amount ELSE 0 END) as taxable_sales,\n  SUM(CASE WHEN category IN ('expense', 'cos') THEN amount ELSE 0 END) as purchases\nFROM transactions\nWHERE TO_CHAR(txn_date, 'YYYY-MM') = '{{ $json.period }}'\nGROUP BY entity",
+        "options": {}
+      },
+      "id": "db-get-transactions",
+      "name": "DB - Get Period Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [750, 400],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Fetch transactions for tax period"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom decimal import Decimal\nfrom tax import BIRCalculator, TaxFormGenerator\nfrom tax.bir_calculator import VATType\n\ndata = json.loads(sys.argv[1])\ncalculator = BIRCalculator('/opt/accounting-automation/python/tax')\ngenerator = TaxFormGenerator('/opt/accounting-automation/python/tax')\n\nresults = []\nfor entity_data in data['entities']:\n    entity = entity_data['entity']\n    \n    # Compute VAT\n    sales = [{'amount': entity_data['taxable_sales'], 'vat_type': 'vatable'}]\n    purchases = [{'amount': entity_data['purchases'], 'vat_type': 'vatable'}]\n    \n    output_vat, _ = calculator.compute_output_vat(sales)\n    input_vat, _ = calculator.compute_input_vat(purchases)\n    vat_payable = max(Decimal('0'), output_vat - input_vat)\n    \n    results.append({\n        'entity': entity,\n        'period': data['period'],\n        'gross_sales': float(entity_data['gross_sales']),\n        'taxable_sales': float(entity_data['taxable_sales']),\n        'purchases': float(entity_data['purchases']),\n        'output_vat': float(output_vat),\n        'input_vat': float(input_vat),\n        'vat_payable': float(vat_payable)\n    })\n\nprint(json.dumps({'computations': results, 'period': data['period']}))\n\" '{{ JSON.stringify({period: $json.period, entities: $json}) }}'"
+      },
+      "id": "python-compute-vat",
+      "name": "Python - Compute VAT",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1000, 400],
+      "notes": "Compute VAT for all entities"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "computations",
+        "options": {
+          "splitOutFieldName": "computation"
+        }
+      },
+      "id": "split-entities",
+      "name": "Split - By Entity",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1250, 400],
+      "notes": "Process each entity"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom datetime import date\nfrom tax import TaxFormGenerator\nfrom tax.form_generator import FormType\n\ndata = json.loads(sys.argv[1])\ngenerator = TaxFormGenerator('/opt/accounting-automation/python/tax')\n\ntax_data = {\n    'gross_sales': data['gross_sales'],\n    'taxable_sales': data['taxable_sales'],\n    'output_vat': data['output_vat'],\n    'input_vat': data['input_vat'],\n    'tax_due': data['vat_payable'],\n    'tax_payable': data['vat_payable'],\n    'total_amount_due': data['vat_payable']\n}\n\nform = generator.generate_form(\n    form_type=FormType.VAT_MONTHLY,\n    entity=data['entity'],\n    period=data['period'],\n    tax_data=tax_data,\n    output_dir='/tmp/tax_forms'\n)\n\nprint(json.dumps({\n    'entity': data['entity'],\n    'period': data['period'],\n    'form_type': '2550M',\n    'filename': form.filename,\n    'file_path': str(form.file_path) if form.file_path else None,\n    'vat_payable': data['vat_payable'],\n    'is_valid': form.is_valid,\n    'errors': form.validation_errors\n}))\n\" '{{ JSON.stringify($json.computation) }}'"
+      },
+      "id": "python-generate-form",
+      "name": "Python - Generate Form",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1500, 400],
+      "notes": "Generate BIR form draft"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.vat_payable }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-has-tax-due",
+      "name": "IF - Has Tax Due",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1750, 400],
+      "notes": "Check if there's tax to pay"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ACCOUNTING_CHAT }}",
+        "text": "📋 *Tax Form Generated*\n\n*Entity:* {{ $json.entity.toUpperCase() }}\n*Period:* {{ $json.period }}\n*Form:* BIR Form {{ $json.form_type }}\n\n*VAT Summary:*\n• Output VAT: ₱{{ $json.computation?.output_vat?.toLocaleString() || '0' }}\n• Input VAT: ₱{{ $json.computation?.input_vat?.toLocaleString() || '0' }}\n• VAT Payable: ₱{{ $json.vat_payable?.toLocaleString() || '0' }}\n\n📎 Draft form attached\n\n⚠️ *Please review before filing*",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "replyMarkup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "✅ Mark Reviewed",
+                  "callback_data": "tax_reviewed_{{ $json.entity }}_{{ $json.period }}"
+                },
+                {
+                  "text": "📝 Request Changes",
+                  "callback_data": "tax_changes_{{ $json.entity }}_{{ $json.period }}"
+                }
+              ]
+            ]
+          }
+        }
+      },
+      "id": "telegram-notify-tax",
+      "name": "Telegram - Tax Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2000, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send tax form notification"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ACCOUNTING_CHAT }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "BIR Form {{ $json.form_type }} - {{ $json.entity.toUpperCase() }} ({{ $json.period }})"
+        }
+      },
+      "id": "telegram-send-form",
+      "name": "Telegram - Send Form PDF",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2250, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send PDF form"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, entity, details, status)\nVALUES (\n  'tax_form_generated',\n  '{{ $json.entity }}',\n  '{{ JSON.stringify({form_type: $json.form_type, period: $json.period, vat_payable: $json.vat_payable}) }}',\n  'success'\n)",
+        "options": {}
+      },
+      "id": "db-audit-log",
+      "name": "DB - Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2250, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Log form generation"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom datetime import date, timedelta\nfrom tax import BIRCalculator\nfrom tax.form_generator import FormType\n\ncalculator = BIRCalculator('/opt/accounting-automation/python/tax')\n\nforms = [\n    ('2550M', 'VAT Monthly'),\n    ('0619E', 'EWT Monthly'),\n    ('1601C', 'Compensation Monthly')\n]\n\nreminders = []\ntoday = date.today()\n\nfor form_code, form_name in forms:\n    # Deadline is typically 20th of following month\n    period_end = (today.replace(day=1) - timedelta(days=1))\n    deadline = today.replace(day=20) if today.day < 20 else (today.replace(day=1) + timedelta(days=50)).replace(day=20)\n    \n    days_until = (deadline - today).days\n    \n    if days_until <= 7:\n        reminders.append({\n            'form': form_code,\n            'name': form_name,\n            'deadline': deadline.isoformat(),\n            'days_until': days_until,\n            'urgency': 'OVERDUE' if days_until < 0 else 'URGENT' if days_until <= 3 else 'DUE_SOON'\n        })\n\nprint(json.dumps({'reminders': reminders, 'count': len(reminders)}))\n\""
+      },
+      "id": "python-check-deadlines",
+      "name": "Python - Check Deadlines",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [750, 700],
+      "notes": "Check upcoming tax deadlines"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.count }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-has-reminders",
+      "name": "IF - Has Reminders",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 700],
+      "notes": "Check if there are deadline reminders"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ACCOUNTING_CHAT }}",
+        "text": "📅 *Tax Filing Reminders*\n\n{{ $json.reminders.map(r => `${r.urgency === 'OVERDUE' ? '🔴' : r.urgency === 'URGENT' ? '🟠' : '⚠️'} *${r.name}* (Form ${r.form})\\nDeadline: ${r.deadline}\\nDays: ${r.days_until < 0 ? 'OVERDUE by ' + Math.abs(r.days_until) : r.days_until + ' remaining'}`).join('\\n\\n') }}\n\n_Please ensure timely filing to avoid penalties._",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-reminders",
+      "name": "Telegram - Deadline Reminders",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1250, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send deadline reminders"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({success: true, forms_generated: $json.length}) }}"
+      },
+      "id": "respond-success",
+      "name": "Respond - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2500, 400],
+      "notes": "Return success response"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "❌ *Tax Processing Error*\n\nError: {{ $json.error?.message }}\nTime: {{ new Date().toISOString() }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-error",
+      "name": "Telegram - Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2000, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Error notification"
+    }
+  ],
+  "connections": {
+    "Cron - Monthly Tax Check": {
+      "main": [
+        [
+          {
+            "node": "Set - Monthly Period",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cron - Quarterly Tax Check": {
+      "main": [
+        [
+          {
+            "node": "Set - Quarterly Period",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Compute": {
+      "main": [
+        [
+          {
+            "node": "Python - Check Deadlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Monthly Period": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Period Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Quarterly Period": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Period Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Period Transactions": {
+      "main": [
+        [
+          {
+            "node": "Python - Compute VAT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Compute VAT": {
+      "main": [
+        [
+          {
+            "node": "Split - By Entity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split - By Entity": {
+      "main": [
+        [
+          {
+            "node": "Python - Generate Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Generate Form": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Tax Due",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Tax Due": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Tax Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Tax Notification": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Form PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send Form PDF": {
+      "main": [
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Check Deadlines": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Reminders": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "Asia/Manila"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "tax",
+      "id": "12"
+    },
+    {
+      "name": "bir",
+      "id": "13"
+    }
+  ],
+  "triggerCount": 3,
+  "pinData": {},
+  "versionId": "1"
+}

@@ -1,0 +1,200 @@
+# Philippine Tax Rules Configuration
+# Bureau of Internal Revenue (BIR) Tax Rates and Rules
+# Last Updated: 2025
+
+# Value Added Tax (VAT)
+vat:
+  standard_rate: 0.12  # 12%
+  zero_rated_transactions:
+    - export_sales
+    - foreign_currency_denominated_sales
+    - sales_to_registered_enterprises_in_ecozones
+    - sales_to_diplomatic_missions
+  exempt_transactions:
+    - sale_of_agricultural_products
+    - educational_services
+    - medical_services
+    - residential_lease_below_15k
+    - sale_of_real_property_below_threshold
+  vat_threshold: 3000000  # ₱3,000,000 annual gross sales
+
+# Percentage Tax (for non-VAT registered)
+percentage_tax:
+  rate: 0.03  # 3%
+  threshold: 3000000  # Below this = percentage tax instead of VAT
+
+# Expanded Withholding Tax (EWT) Rates
+ewt:
+  professional_fees:
+    individual: 0.10  # 10%
+    corporate: 0.15   # 15%
+  rentals:
+    real_property: 0.05  # 5%
+    personal_property: 0.05  # 5%
+  services:
+    contractors: 0.02  # 2%
+    customs_brokers: 0.10  # 10%
+    security_services: 0.02  # 2%
+    janitorial_services: 0.02  # 2%
+    advertising: 0.02  # 2%
+    management_fees: 0.10  # 10% (if paid to non-resident)
+  purchases:
+    goods: 0.01  # 1%
+    services: 0.02  # 2%
+  commissions:
+    insurance: 0.10  # 10%
+    real_estate: 0.10  # 10%
+    general: 0.10  # 10%
+
+# Final Withholding Tax (FWT) Rates
+fwt:
+  interest:
+    bank_deposits: 0.20  # 20%
+    long_term_deposits: 0.00  # Exempt if 5+ years
+    money_market: 0.20  # 20%
+  dividends:
+    domestic_corp_to_individual: 0.10  # 10%
+    domestic_corp_to_corp: 0.00  # Exempt (intercorporate)
+    nlrc_to_resident: 0.20  # 20%
+  royalties:
+    general: 0.20  # 20%
+    books_literary: 0.10  # 10%
+  prizes_winnings:
+    php_10k_and_above: 0.20  # 20%
+    below_php_10k: 0.00  # Exempt
+
+# Withholding Tax on Compensation
+compensation_tax:
+  # 2024-2025 Tax Table (TRAIN Law)
+  brackets:
+    - { min: 0, max: 250000, rate: 0.00, fixed: 0 }
+    - { min: 250001, max: 400000, rate: 0.15, fixed: 0 }
+    - { min: 400001, max: 800000, rate: 0.20, fixed: 22500 }
+    - { min: 800001, max: 2000000, rate: 0.25, fixed: 102500 }
+    - { min: 2000001, max: 8000000, rate: 0.30, fixed: 402500 }
+    - { min: 8000001, max: null, rate: 0.35, fixed: 2202500 }
+
+  # Non-taxable benefits
+  non_taxable:
+    de_minimis:
+      rice_subsidy: 2000  # per month
+      uniform_allowance: 6000  # per year
+      medical_cash_allowance: 10000  # per year
+      laundry_allowance: 300  # per month
+      achievement_awards: 10000  # per year
+      christmas_gift: 5000  # per year
+      daily_meal_allowance: 150  # per day (for overtime)
+    thirteenth_month_pay_ceiling: 90000
+    other_benefits_ceiling: 90000
+
+# Corporate Income Tax
+corporate_tax:
+  # CREATE Law rates
+  domestic_corporation:
+    general: 0.25  # 25%
+    msme: 0.20  # 20% for net taxable income ≤ ₱5M
+  msme_threshold: 5000000
+  minimum_corporate_income_tax: 0.02  # 2% of gross income
+
+# Documentary Stamp Tax (DST)
+dst:
+  lease_agreements:
+    first_2000: 3.00  # ₱3 for first ₱2,000
+    each_additional_1000: 1.00  # ₱1 for each additional ₱1,000
+  bank_checks: 3.00
+  bills_of_exchange: 0.60  # per ₱200
+  bonds: 1.50  # per ₱200
+  certificates_of_stock:
+    par_value_rate: 0.01  # 1% of par value
+    no_par_original: 0.01  # 1% of actual consideration
+    no_par_transfer: 0.0075  # 0.75% of actual consideration
+
+# Filing Deadlines
+filing_deadlines:
+  vat_monthly: 20  # 20th of following month
+  vat_quarterly: 25  # 25th of month following quarter
+  percentage_tax_quarterly: 25
+  ewt_monthly: 10  # 10th of following month
+  ewt_quarterly: "last_day"  # Last day of month following quarter
+  compensation_monthly: 10
+  corporate_income_tax_quarterly: 60  # 60 days after quarter end
+  annual_income_tax: "april_15"
+
+# BIR Form Numbers
+forms:
+  # VAT Forms
+  vat_monthly: "2550M"
+  vat_quarterly: "2550Q"
+
+  # Percentage Tax
+  percentage_tax_quarterly: "2551Q"
+
+  # Withholding Tax Forms
+  ewt_monthly: "0619E"
+  ewt_quarterly: "1601EQ"
+  fwt_monthly: "0619F"
+  fwt_quarterly: "1601FQ"
+  compensation_monthly: "1601C"
+  compensation_annual: "1604CF"
+
+  # Income Tax Forms
+  quarterly_income_tax: "1702Q"
+  annual_income_tax_corp: "1702"
+  annual_income_tax_individual: "1701"
+
+  # Certificates
+  certificate_compensation: "2316"
+  certificate_ewt: "2307"
+  certificate_fwt: "2306"
+
+# Penalty Rates
+penalties:
+  surcharge:
+    late_filing: 0.25  # 25%
+    willful_neglect: 0.50  # 50%
+  interest_rate: 0.12  # 12% per annum (double legal rate)
+  compromise_penalty:
+    min: 200
+    max: 50000
+
+# Industry-Specific Rules
+industry_rules:
+  gaming:
+    franchise_tax_rate: 0.05  # 5% of gross revenue in lieu of all taxes
+    pagcor_licensed: true
+  restaurant:
+    service_charge_vatable: true
+  real_estate:
+    capital_gains_tax: 0.06  # 6% of selling price or FMV
+    creditable_withholding_tax: 0.06  # For sellers not habitually engaged
+
+# Account Code Mappings for Tax
+account_tax_mapping:
+  # Revenue accounts
+  "4100":
+    tax_type: "output_vat"
+    ewt_applicable: false
+  "4200":
+    tax_type: "output_vat"
+    ewt_applicable: false
+
+  # Expense accounts that may require EWT
+  "6110":
+    tax_type: "input_vat"
+    ewt_type: "professional_fees"
+    ewt_rate: "individual"
+  "6120":
+    tax_type: "input_vat"
+    ewt_type: "services"
+    ewt_rate: "contractors"
+  "6130":
+    tax_type: "input_vat"
+    ewt_type: "rentals"
+    ewt_rate: "real_property"
+  "6200":
+    tax_type: "input_vat"
+    ewt_type: "purchases"
+    ewt_rate: "services"
+  "7100":
+    tax_type: "compensation"
+    withholding: true

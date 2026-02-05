@@ -1,0 +1,454 @@
+{
+  "name": "10 - Fund Request Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fund-request/generate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "[Trigger] - Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "fund-request-generate"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 3,18 * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "[Trigger] - Cron (3rd & 18th)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body ? 'webhook' : 'cron' }}",
+              "operation": "equals",
+              "value2": "webhook"
+            }
+          ]
+        }
+      },
+      "id": "switch-source",
+      "name": "[Switch] - Source Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract data from webhook body\nconst body = $input.first().json.body;\n\nreturn [{\n  json: {\n    entity: body.entity,\n    payment_date: body.payment_date,\n    section_a_items: body.section_a_items || [],\n    section_b_items: body.section_b_items || [],\n    current_fund_balance: body.current_fund_balance,\n    project_expenses: body.project_expenses || [],\n    created_by: body.created_by || 'dashboard'\n  }\n}];"
+      },
+      "id": "parse-webhook",
+      "name": "[Code] - Parse Webhook Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate reminder notification for cron trigger\n// Actual fund request will be created via dashboard\n\nconst now = new Date();\nconst day = now.getDate();\n\nlet paymentDay, paymentLabel;\nif (day === 3) {\n  paymentDay = 5;\n  paymentLabel = '1st Half';\n} else {\n  paymentDay = 20;\n  paymentLabel = '2nd Half';\n}\n\nconst paymentDate = new Date(now.getFullYear(), now.getMonth(), paymentDay);\n\nreturn [{\n  json: {\n    type: 'reminder',\n    message: `Fund Request reminder: Payment date ${paymentDate.toLocaleDateString()} (${paymentLabel}) is in 2 days.`,\n    payment_date: paymentDate.toISOString().split('T')[0],\n    entities: ['solaire', 'cod', 'royce', 'manila_junket', 'tours', 'midori']\n  }\n}];"
+      },
+      "id": "generate-reminder",
+      "name": "[Code] - Generate Reminder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.type }}",
+              "operation": "equals",
+              "value2": "reminder"
+            }
+          ]
+        }
+      },
+      "id": "check-reminder",
+      "name": "[IF] - Is Reminder?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 400]
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom datetime import date\nfrom decimal import Decimal\nfrom fund_request import FundCalculator, FundRequestExcelGenerator\n\n# Read input from environment\ndata = json.loads('''{{ JSON.stringify($json) }}''')\n\n# Create fund request\ncalculator = FundCalculator()\nfund_request = calculator.create_fund_request(\n    entity=data['entity'],\n    payment_date=date.fromisoformat(data['payment_date']),\n    section_a_items=data.get('section_a_items', []),\n    section_b_items=data.get('section_b_items', []),\n    current_fund_balance=Decimal(str(data['current_fund_balance'])) if data.get('current_fund_balance') else None,\n    project_expenses=data.get('project_expenses', []),\n    created_by=data.get('created_by')\n)\n\n# Validate\nerrors = calculator.validate_fund_request(fund_request)\nif errors:\n    print(json.dumps({'error': errors}))\n    sys.exit(1)\n\n# Generate Excel\ngenerator = FundRequestExcelGenerator()\noutput_path = generator.generate(fund_request)\n\n# Output result\nresult = {\n    'success': True,\n    'fund_request': fund_request.to_dict(),\n    'excel_path': str(output_path),\n    'warnings': calculator.get_warnings(fund_request)\n}\nprint(json.dumps(result))\n\""
+      },
+      "id": "python-generate",
+      "name": "[Execute] - Python Generate",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Python output\nconst stdout = $input.first().json.stdout;\nlet result;\n\ntry {\n  result = JSON.parse(stdout);\n} catch (e) {\n  throw new Error(`Failed to parse Python output: ${stdout}`);\n}\n\nif (result.error) {\n  throw new Error(`Validation failed: ${result.error.join(', ')}`);\n}\n\nreturn [{ json: result }];"
+      },
+      "id": "parse-result",
+      "name": "[Code] - Parse Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "upload",
+        "folderId": "={{ $env.GOOGLE_DRIVE_FOLDER_ID }}",
+        "name": "={{ $json.fund_request.entity }}_FundRequest_{{ $json.fund_request.request_date }}.xlsx",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "gdrive-upload",
+      "name": "[GDrive] - Upload Excel",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1750, 200],
+      "credentials": {
+        "googleApi": {
+          "id": "google-drive-creds",
+          "name": "Google Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "document": "={{ $node['[Execute] - Python Generate'].json.excel_path }}",
+        "additionalFields": {
+          "caption": "Fund Request - {{ $json.fund_request.entity }}\nPayment Date: {{ $json.fund_request.payment_date }}\n\nSection A: {{ $json.fund_request.section_a_total.toLocaleString() }} PHP\nSection B: {{ $json.fund_request.section_b_total.toLocaleString() }} PHP\nTOTAL: {{ $json.fund_request.overall_total.toLocaleString() }} PHP\n\nCurrent Balance: {{ $json.fund_request.current_fund_balance ? $json.fund_request.current_fund_balance.toLocaleString() + ' PHP' : 'N/A' }}\nRemaining: {{ $json.fund_request.remaining_fund ? $json.fund_request.remaining_fund.toLocaleString() + ' PHP' : 'N/A' }}",
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "✅ Approve",
+                  "callback_data": "approve_fund_{{ $json.fund_request.entity }}_{{ $json.fund_request.request_date }}"
+                },
+                {
+                  "text": "❌ Reject",
+                  "callback_data": "reject_fund_{{ $json.fund_request.entity }}_{{ $json.fund_request.request_date }}"
+                }
+              ],
+              [
+                {
+                  "text": "📝 Request Changes",
+                  "callback_data": "changes_fund_{{ $json.fund_request.entity }}_{{ $json.fund_request.request_date }}"
+                }
+              ]
+            ]
+          }
+        }
+      },
+      "id": "telegram-send",
+      "name": "[Telegram] - Send Document",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [2000, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "fund_requests",
+        "columns": "entity, request_date, payment_date, period_label, section_a_total, section_b_total, overall_total, current_fund_balance, project_expenses_total, remaining_fund, excel_file_path, google_drive_id, telegram_msg_id, status, created_by",
+        "values": "={{ $json.fund_request.entity }}, {{ $json.fund_request.request_date }}, {{ $json.fund_request.payment_date }}, {{ $json.fund_request.period_label }}, {{ $json.fund_request.section_a_total }}, {{ $json.fund_request.section_b_total }}, {{ $json.fund_request.overall_total }}, {{ $json.fund_request.current_fund_balance }}, {{ $json.fund_request.project_expenses_total }}, {{ $json.fund_request.remaining_fund }}, {{ $node['[Execute] - Python Generate'].json.excel_path }}, {{ $node['[GDrive] - Upload Excel'].json.id }}, {{ $node['[Telegram] - Send Document'].json.message_id }}, 'sent', {{ $json.fund_request.created_by }}"
+      },
+      "id": "db-save-request",
+      "name": "[DB] - Save Fund Request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [2250, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "⏰ {{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "telegram-reminder",
+      "name": "[Telegram] - Send Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1250, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, fund_request_id: $node['[DB] - Save Fund Request'].json.id, message: 'Fund request generated and sent' }) }}"
+      },
+      "id": "webhook-response-success",
+      "name": "[Response] - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2500, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: $json.errorMessage || 'Unknown error' }) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "webhook-response-error",
+      "name": "[Response] - Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2500, 400]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "action",
+              "value": "fund_request_generated"
+            },
+            {
+              "name": "workflow",
+              "value": "10-fund-request-generator"
+            },
+            {
+              "name": "status",
+              "value": "success"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-audit-success",
+      "name": "[Set] - Audit Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [2250, 100]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "audit_log",
+        "columns": "action, workflow, entity, status, details",
+        "values": "fund_request_generated, 10-fund-request-generator, {{ $json.fund_request.entity }}, success, {{ JSON.stringify({ fund_request_id: $node['[DB] - Save Fund Request'].json.id, total: $json.fund_request.overall_total }) }}"
+      },
+      "id": "db-audit-log",
+      "name": "[DB] - Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [2500, 100],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "[Trigger] - Webhook": {
+      "main": [
+        [
+          {
+            "node": "[Switch] - Source Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Trigger] - Cron (3rd & 18th)": {
+      "main": [
+        [
+          {
+            "node": "[Switch] - Source Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Switch] - Source Type": {
+      "main": [
+        [
+          {
+            "node": "[Code] - Parse Webhook Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[Code] - Generate Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Code] - Parse Webhook Data": {
+      "main": [
+        [
+          {
+            "node": "[IF] - Is Reminder?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Code] - Generate Reminder": {
+      "main": [
+        [
+          {
+            "node": "[IF] - Is Reminder?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[IF] - Is Reminder?": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Send Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[Execute] - Python Generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Execute] - Python Generate": {
+      "main": [
+        [
+          {
+            "node": "[Code] - Parse Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Code] - Parse Result": {
+      "main": [
+        [
+          {
+            "node": "[GDrive] - Upload Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GDrive] - Upload Excel": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Send Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Telegram] - Send Document": {
+      "main": [
+        [
+          {
+            "node": "[DB] - Save Fund Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] - Save Fund Request": {
+      "main": [
+        [
+          {
+            "node": "[Set] - Audit Success",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[Response] - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Set] - Audit Success": {
+      "main": [
+        [
+          {
+            "node": "[DB] - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "fund-request"
+    },
+    {
+      "name": "phase-7"
+    }
+  ],
+  "pinData": {},
+  "versionId": "1"
+}

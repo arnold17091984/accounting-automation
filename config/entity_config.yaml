@@ -1,0 +1,223 @@
+# =============================================================================
+# Entity Configuration - BK Keyforce / BETRNK Group
+# =============================================================================
+# Defines the 6 business entities and their QuickBooks Class mappings
+# =============================================================================
+
+metadata:
+  version: "1.0"
+  last_updated: "2025-01-01"
+  default_currency: PHP
+  parent_company: "BK Keyforce"
+
+# -----------------------------------------------------------------------------
+# Entity Definitions
+# -----------------------------------------------------------------------------
+entities:
+  solaire:
+    name: "Solaire"
+    full_name: "Solaire Junket Operations"
+    qb_class: "Solaire"
+    industry: gaming
+    description: "VIP gaming junket operations at Solaire Resort & Casino"
+    active: true
+    priority: 1  # Pilot entity for Phase 2
+    settings:
+      has_rolling_commission: true
+      commission_rate: 0.45  # 45% rolling commission
+      vip_rebate_enabled: true
+      game_record_source: "google_sheets"
+    contacts:
+      primary: "solaire_ops@bkkeyforce.com"
+    data_sources:
+      - type: game_record
+        format: xlsx
+        frequency: daily
+      - type: expense
+        format: google_form
+        frequency: as_needed
+
+  cod:
+    name: "COD"
+    full_name: "City of Dreams Manila Operations"
+    qb_class: "COD"
+    industry: gaming
+    description: "VIP gaming junket operations at City of Dreams"
+    active: true
+    priority: 2
+    settings:
+      has_rolling_commission: true
+      commission_rate: 0.42
+      vip_rebate_enabled: true
+      game_record_source: "google_sheets"
+    contacts:
+      primary: "cod_ops@bkkeyforce.com"
+    data_sources:
+      - type: game_record
+        format: xlsx
+        frequency: daily
+      - type: expense
+        format: google_form
+        frequency: as_needed
+
+  royce:
+    name: "Royce Clark"
+    full_name: "Royce Clark Gaming"
+    qb_class: "Royce Clark"
+    industry: gaming
+    description: "Gaming junket operations - Royce Clark brand"
+    active: true
+    priority: 3
+    settings:
+      has_rolling_commission: true
+      commission_rate: 0.40
+      vip_rebate_enabled: true
+      game_record_source: "google_sheets"
+    contacts:
+      primary: "royce_ops@bkkeyforce.com"
+    data_sources:
+      - type: game_record
+        format: xlsx
+        frequency: daily
+      - type: expense
+        format: google_form
+        frequency: as_needed
+
+  manila_junket:
+    name: "Manila Junket"
+    full_name: "Manila Junket International"
+    qb_class: "Manila Junket"
+    industry: gaming
+    description: "Gaming junket holding and operations"
+    active: true
+    priority: 4
+    settings:
+      has_rolling_commission: true
+      commission_rate: 0.40
+      vip_rebate_enabled: true
+      is_consolidation_parent: true  # Parent for 3-junket consolidation
+    contacts:
+      primary: "manila_junket@bkkeyforce.com"
+    consolidation:
+      includes: [solaire, cod, royce]
+      method: full
+
+  tours:
+    name: "Tours BGC/BSM"
+    full_name: "Tours BGC & BSM Travel Services"
+    qb_class: "Tours"
+    industry: travel
+    description: "Travel and tour services business"
+    active: true
+    priority: 5
+    settings:
+      has_rolling_commission: false
+      has_tour_packages: true
+      accommodation_booking: true
+    contacts:
+      primary: "tours@bkkeyforce.com"
+    data_sources:
+      - type: booking
+        format: csv
+        frequency: daily
+      - type: expense
+        format: google_form
+        frequency: as_needed
+
+  midori:
+    name: "Midori no Mart"
+    full_name: "Midori no Mart Corporation"
+    qb_class: "Midori"
+    industry: retail
+    description: "Japanese convenience store / retail operations"
+    active: true
+    priority: 6
+    settings:
+      has_rolling_commission: false
+      has_inventory: true
+      pos_integration: true
+    contacts:
+      primary: "midori@bkkeyforce.com"
+    data_sources:
+      - type: pos_sales
+        format: csv
+        frequency: daily
+      - type: inventory
+        format: xlsx
+        frequency: weekly
+      - type: expense
+        format: google_form
+        frequency: as_needed
+
+# -----------------------------------------------------------------------------
+# Consolidated Reporting Groups
+# -----------------------------------------------------------------------------
+consolidation_groups:
+  junket_consolidated:
+    name: "Junket Consolidated"
+    description: "Consolidated financial statements for gaming entities"
+    entities: [solaire, cod, royce]
+    parent: manila_junket
+    reporting_frequency: monthly
+
+  all_entities:
+    name: "BK Keyforce Group"
+    description: "Full group consolidation"
+    entities: [solaire, cod, royce, manila_junket, tours, midori]
+    reporting_frequency: monthly
+
+# -----------------------------------------------------------------------------
+# Industry-Specific Settings
+# -----------------------------------------------------------------------------
+industry_settings:
+  gaming:
+    regulatory_body: "PAGCOR"
+    license_required: true
+    commission_accounts:
+      income: "4020"  # Rolling Commission Income
+      expense: "5100"  # Junket Commission Expense
+    regulatory_accounts:
+      fees: "6910"  # Gaming Regulatory Fees
+      license: "6920"  # PAGCOR License Fees
+
+  travel:
+    cos_accounts:
+      accommodation: "5200"
+      transportation: "5210"
+    booking_sources:
+      - agoda
+      - booking.com
+      - airbnb
+
+  retail:
+    inventory_method: "FIFO"
+    cos_account: "5300"
+    sales_account: "4040"
+    pos_systems:
+      - name: "Utak"
+        integration: api
+
+# -----------------------------------------------------------------------------
+# Shared Credit Cards
+# -----------------------------------------------------------------------------
+shared_credit_cards:
+  - card_name: "BDO Corporate Card - Main"
+    bank: bdo
+    last_four: "1234"
+    primary_entity: solaire
+    shared_by: [solaire, cod, royce]
+    allocation_method: "by_merchant"  # or 'equal_split', 'by_amount'
+
+  - card_name: "UnionBank Business Card"
+    bank: unionbank
+    last_four: "5678"
+    primary_entity: manila_junket
+    shared_by: [manila_junket, tours]
+    allocation_method: "manual_review"
+
+  - card_name: "GCash Business"
+    bank: gcash
+    last_four: "9012"
+    primary_entity: midori
+    shared_by: [midori]
+    allocation_method: "single_entity"

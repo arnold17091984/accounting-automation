@@ -1,0 +1,560 @@
+{
+  "name": "04 - Expense Approval Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "expense-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-expense",
+      "name": "Webhook - Expense Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "expense-request",
+      "notes": "Receives expense requests from Google Form or API"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "request_type",
+              "value": "expense"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-request-type",
+      "name": "Set - Request Type",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "notes": "Mark as expense request"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  b.budget_amount,\n  COALESCE(SUM(t.amount), 0) as spent_amount,\n  b.budget_amount - COALESCE(SUM(t.amount), 0) as remaining\nFROM budgets b\nLEFT JOIN transactions t ON \n  t.entity = b.entity AND \n  t.account_code = b.account_code AND\n  EXTRACT(YEAR FROM t.txn_date) = b.year AND\n  EXTRACT(MONTH FROM t.txn_date) = b.month\nWHERE b.entity = '{{ $json.entity }}'\n  AND b.account_code = '{{ $json.account_code }}'\n  AND b.year = EXTRACT(YEAR FROM CURRENT_DATE)\n  AND b.month = EXTRACT(MONTH FROM CURRENT_DATE)\nGROUP BY b.budget_amount",
+        "options": {}
+      },
+      "id": "db-get-budget",
+      "name": "DB - Get Budget Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Fetch budget context for approval"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.amount }}",
+              "operation": "smallerEqual",
+              "value2": "={{ $env.AUTO_APPROVE_LIMIT || 10000 }}"
+            }
+          ]
+        }
+      },
+      "id": "if-auto-approve",
+      "name": "IF - Auto Approve",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "notes": "Check if amount qualifies for auto-approval"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom telegram import ApprovalHandler\nfrom decimal import Decimal\n\ndata = json.loads(sys.argv[1])\nhandler = ApprovalHandler('/opt/accounting-automation/config')\n\nrequest = handler.create_approval_request(\n    request_type='expense',\n    entity=data['entity'],\n    amount=Decimal(str(data['amount'])),\n    description=data['description'],\n    requester=data['requester'],\n    budget_context=data.get('budget_context', {}),\n    attachments=data.get('attachments', []),\n    metadata=data.get('metadata', {})\n)\n\nmessage, keyboard = handler.format_approval_message(request)\nprint(json.dumps({\n    'request_id': request.id,\n    'message': message,\n    'keyboard': keyboard,\n    'status': request.status.value\n}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-create-request",
+      "name": "Python - Create Approval Request",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1100, 200],
+      "notes": "Create approval request with budget context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approval_log (\n  request_type, entity, amount, status, requested_at, notes\n) VALUES (\n  'expense',\n  '{{ $json.entity }}',\n  {{ $json.amount }},\n  'auto_approved',\n  NOW(),\n  '{\"description\": \"{{ $json.description }}\", \"requester\": \"{{ $json.requester }}\", \"reason\": \"Under auto-approval threshold\"}'\n) RETURNING id",
+        "options": {}
+      },
+      "id": "db-auto-approve",
+      "name": "DB - Auto Approve",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1100, 400],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Auto-approve small expenses"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_APPROVAL_CHAT }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "replyMarkup": "={{ $json.keyboard }}"
+        }
+      },
+      "id": "telegram-send-approval",
+      "name": "Telegram - Send Approval Request",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1350, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send approval request to Telegram"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.requester_telegram_id }}",
+        "text": "✅ *Expense Auto-Approved*\n\nYour expense request has been automatically approved.\n\n*Amount:* ₱{{ $json.amount.toLocaleString() }}\n*Description:* {{ $json.description }}\n*Reason:* Under ₱10,000 threshold\n\n_Request ID: {{ $json.id }}_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-notify-auto",
+      "name": "Telegram - Notify Auto Approval",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1350, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notify requester of auto-approval"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approval_log \nSET telegram_msg_id = '{{ $json.message_id }}'\nWHERE id = '{{ $json.request_id }}'::uuid",
+        "options": {}
+      },
+      "id": "db-save-msg-id",
+      "name": "DB - Save Message ID",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1600, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Store Telegram message ID for updates"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({success: true, request_id: $json.request_id, status: $json.status}) }}"
+      },
+      "id": "respond-success",
+      "name": "Respond - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1850, 300],
+      "notes": "Return success response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, entity, details, status)\nVALUES (\n  'expense_request',\n  '{{ $json.entity }}',\n  '{{ JSON.stringify({amount: $json.amount, requester: $json.requester, status: $json.status || \"pending\"}) }}',\n  'success'\n)",
+        "options": {}
+      },
+      "id": "db-audit-log",
+      "name": "DB - Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1850, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Log request to audit trail"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "approval-callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-callback",
+      "name": "Webhook - Approval Callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 600],
+      "webhookId": "approval-callback",
+      "notes": "Receives callback from Telegram buttons"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.callback_data.split('_')[0] }}",
+              "operation": "equals",
+              "value2": "approve"
+            }
+          ]
+        }
+      },
+      "id": "switch-action",
+      "name": "Switch - Action Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [500, 600],
+      "notes": "Route by callback action"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom telegram import ApprovalHandler\n\ndata = json.loads(sys.argv[1])\nhandler = ApprovalHandler('/opt/accounting-automation/config')\n\nresult = handler.handle_callback(\n    callback_data=data['callback_data'],\n    user_id=data['user_id'],\n    message_text=data.get('message_text', '')\n)\n\nprint(json.dumps({\n    'success': result.success,\n    'message': result.message,\n    'action': result.action,\n    'request_id': result.request_id\n}))\n\" '{{ JSON.stringify($json) }}'"
+      },
+      "id": "python-handle-callback",
+      "name": "Python - Handle Callback",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [750, 600],
+      "notes": "Process approval callback"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "messageId": "={{ $json.message_id }}",
+        "text": "={{ $json.result.message }}\n\n_Processed by {{ $json.user_name }} at {{ new Date().toISOString() }}_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-update-message",
+      "name": "Telegram - Update Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1000, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Update original message with result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.result.action }}",
+              "operation": "equals",
+              "value2": "approved"
+            }
+          ]
+        }
+      },
+      "id": "if-approved",
+      "name": "IF - Was Approved",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 600],
+      "notes": "Check if expense was approved"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO transactions (\n  source, entity, txn_date, description, amount,\n  account_code, account_name, category,\n  classification_method, approved, approved_by, approved_at\n) \nSELECT \n  'expense_form',\n  entity,\n  CURRENT_DATE,\n  notes->>'description',\n  amount,\n  '{{ $json.account_code || \"6100\" }}',\n  '{{ $json.account_name || \"General Expenses\" }}',\n  'expense',\n  'human',\n  true,\n  '{{ $json.approved_by }}',\n  NOW()\nFROM approval_log\nWHERE id = '{{ $json.request_id }}'::uuid\nRETURNING id",
+        "options": {}
+      },
+      "id": "db-create-transaction",
+      "name": "DB - Create Transaction",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1500, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Create transaction from approved expense"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.requester_telegram_id }}",
+        "text": "✅ *Expense Approved!*\n\nYour expense request has been approved.\n\n*Amount:* ₱{{ $json.amount.toLocaleString() }}\n*Approved by:* {{ $json.approved_by }}\n\n_Request ID: {{ $json.request_id }}_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-notify-requester",
+      "name": "Telegram - Notify Requester",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notify requester of approval"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({success: true, action: $json.result.action}) }}"
+      },
+      "id": "respond-callback",
+      "name": "Respond - Callback Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1750, 600],
+      "notes": "Return callback response"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "❌ *Approval Workflow Error*\n\nError: {{ $json.error.message }}\nRequest: {{ $json.request_id }}\nTime: {{ new Date().toISOString() }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-error",
+      "name": "Telegram - Error Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1750, 800],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notify admin on error"
+    }
+  ],
+  "connections": {
+    "Webhook - Expense Request": {
+      "main": [
+        [
+          {
+            "node": "Set - Request Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Request Type": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Budget Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Budget Context": {
+      "main": [
+        [
+          {
+            "node": "IF - Auto Approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Auto Approve": {
+      "main": [
+        [
+          {
+            "node": "DB - Auto Approve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Python - Create Approval Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Create Approval Request": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Approval Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Auto Approve": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Notify Auto Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Send Approval Request": {
+      "main": [
+        [
+          {
+            "node": "DB - Save Message ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Notify Auto Approval": {
+      "main": [
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Save Message ID": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Approval Callback": {
+      "main": [
+        [
+          {
+            "node": "Python - Handle Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Handle Callback": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Update Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Update Message": {
+      "main": [
+        [
+          {
+            "node": "IF - Was Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Was Approved": {
+      "main": [
+        [
+          {
+            "node": "DB - Create Transaction",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Telegram - Notify Requester",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - Callback Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Create Transaction": {
+      "main": [
+        [
+          {
+            "node": "Respond - Callback Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "Asia/Manila"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "approval",
+      "id": "5"
+    },
+    {
+      "name": "expense",
+      "id": "6"
+    }
+  ],
+  "triggerCount": 2,
+  "pinData": {},
+  "versionId": "1"
+}

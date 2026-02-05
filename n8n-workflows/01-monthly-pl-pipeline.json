@@ -1,0 +1,559 @@
+{
+  "name": "01 - Monthly P&L Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "[Trigger] - Monthly Schedule (1st 9AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "manual-check",
+              "leftValue": "={{ $json.manual }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "manual-trigger",
+      "name": "[Trigger] - Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 200],
+      "webhookId": "pl-pipeline-manual"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get previous month\nconst now = new Date();\nconst year = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();\nconst month = now.getMonth() === 0 ? 12 : now.getMonth();\nconst period = `${year}-${String(month).padStart(2, '0')}`;\n\n// Entity list\nconst entities = ['solaire', 'cod', 'royce', 'manila_junket', 'tours', 'midori'];\n\nreturn entities.map(entity => ({\n  json: {\n    entity,\n    period,\n    year,\n    month\n  }\n}));"
+      },
+      "id": "setup-entities",
+      "name": "[Setup] - Initialize Entities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 100]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-entities",
+      "name": "[Split] - Process Each Entity",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [450, 100]
+    },
+    {
+      "parameters": {
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_{{ $json.entity.toUpperCase() }}_ID }}/values/Data!A:Z",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      },
+      "id": "fetch-google-sheets",
+      "name": "[Fetch] - Google Sheets Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM transactions WHERE entity = '{{ $json.entity }}' AND EXTRACT(YEAR FROM txn_date) = {{ $json.year }} AND EXTRACT(MONTH FROM txn_date) = {{ $json.month }} ORDER BY txn_date",
+        "options": {}
+      },
+      "id": "fetch-db-transactions",
+      "name": "[Fetch] - DB Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [650, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine data from multiple sources\nconst sheetsData = $('Fetch Google Sheets').all();\nconst dbData = $('Fetch DB Transactions').all();\nconst entity = $input.first().json.entity;\nconst period = $input.first().json.period;\n\n// Parse and normalize transactions\nconst transactions = [];\n\n// Add sheets data\nfor (const row of sheetsData) {\n  if (row.json.values) {\n    for (const value of row.json.values.slice(1)) { // Skip header\n      transactions.push({\n        source: 'google_sheets',\n        date: value[0],\n        description: value[1],\n        amount: parseFloat(value[2]) || 0,\n        category: value[3] || null\n      });\n    }\n  }\n}\n\n// Add DB data\nfor (const row of dbData) {\n  transactions.push({\n    source: 'database',\n    date: row.json.txn_date,\n    description: row.json.description,\n    amount: parseFloat(row.json.amount) || 0,\n    category: row.json.category,\n    account_code: row.json.account_code\n  });\n}\n\nreturn [{\n  json: {\n    entity,\n    period,\n    transactions,\n    transaction_count: transactions.length\n  }\n}];"
+      },
+      "id": "merge-data",
+      "name": "[Merge] - Combine Data Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "requestMethod": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"max_tokens\": 4096,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Classify these transactions for {{ $json.entity }}:\\n\\n{{ JSON.stringify($json.transactions.filter(t => !t.account_code).slice(0, 50)) }}\\n\\nReturn ONLY a JSON array with account_code, account_name, category, confidence for each.\"\n    }\n  ]\n}"
+      },
+      "id": "claude-classify",
+      "name": "[Claude] - Classify Transactions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1100, 100],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-api",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude response and merge with transactions\nconst input = $input.first().json;\nconst claudeResponse = $('Claude Classify').first().json;\n\nlet classifications = [];\ntry {\n  const content = claudeResponse.content[0].text;\n  // Strip markdown if present\n  const cleaned = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  classifications = JSON.parse(cleaned);\n} catch (e) {\n  console.error('Failed to parse Claude response:', e);\n}\n\n// Merge classifications with transactions\nconst classifiedTransactions = input.transactions.map((txn, idx) => {\n  if (txn.account_code) return txn; // Already classified\n  const classification = classifications[idx] || {};\n  return {\n    ...txn,\n    account_code: classification.account_code || 'UNCLASSIFIED',\n    account_name: classification.account_name || 'Unclassified',\n    category: classification.category || 'expense',\n    confidence: classification.confidence || 0,\n    classification_method: 'claude'\n  };\n});\n\nreturn [{\n  json: {\n    entity: input.entity,\n    period: input.period,\n    transactions: classifiedTransactions\n  }\n}];"
+      },
+      "id": "merge-classifications",
+      "name": "[Merge] - Apply Classifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 100]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "transactions",
+        "columns": "source,entity,txn_date,description,amount,account_code,account_name,category,classification_method,classification_confidence",
+        "options": {
+          "onConflict": "updateAll"
+        }
+      },
+      "id": "save-to-db",
+      "name": "[DB] - Save Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [1500, 100],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/accounting-automation/python && python -m pl_generator.excel_builder --entity {{ $json.entity }} --month {{ $json.period }} --data-file /tmp/{{ $json.entity }}_data.json --output-dir /tmp/output/"
+      },
+      "id": "generate-excel",
+      "name": "[Python] - Generate Excel",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1700, 0]
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/accounting-automation/python && python -m pl_generator.pptx_builder --entity {{ $json.entity }} --month {{ $json.period }} --data-file /tmp/{{ $json.entity }}_data.json --output-dir /tmp/output/"
+      },
+      "id": "generate-pptx",
+      "name": "[Python] - Generate PowerPoint",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1700, 200]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "folderId": "={{ $env.GOOGLE_DRIVE_FOLDER_ID }}",
+        "name": "={{ $json.entity }}_pl_{{ $json.period }}.xlsx",
+        "binaryPropertyName": "data"
+      },
+      "id": "upload-drive",
+      "name": "[Drive] - Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1900, 100],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive",
+          "name": "Google Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_GROUP_CHAT_ID }}",
+        "text": "=📊 *{{ $json.entity | capitalize }} P&L Report*\nPeriod: {{ $json.period }}\n\n✅ Report generated successfully\n📁 Files uploaded to Google Drive\n\n_Use /pl {{ $json.entity }} for summary_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-telegram",
+      "name": "[Telegram] - Send Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [2100, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "audit_log",
+        "columns": "action,workflow,entity,details,status",
+        "options": {}
+      },
+      "id": "audit-log",
+      "name": "[DB] - Write Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [2100, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-main",
+          "name": "PostgreSQL Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "check-done",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-all-done",
+      "name": "[Check] - All Entities Done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2300, 100]
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -m pl_generator.consolidation --type junket --month {{ $json.period }} --data-dir /tmp/output --output-dir /tmp/output/"
+      },
+      "id": "generate-consolidated",
+      "name": "[Python] - Generate Consolidated",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2500, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_GROUP_CHAT_ID }}",
+        "text": "=🎉 *Monthly P&L Pipeline Complete*\nPeriod: {{ $json.period }}\n\n📊 Individual Reports: 6 entities\n📈 Consolidated Reports: Junket + Group\n\n_All files uploaded to Google Drive_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "final-notification",
+      "name": "[Telegram] - Final Summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [2700, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.error }}"
+      },
+      "id": "error-handler",
+      "name": "[Error] - Handle Errors",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1500, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "=🔴 *P&L Pipeline Error*\n\nWorkflow: Monthly P&L Pipeline\nEntity: {{ $json.entity || 'Unknown' }}\nError: {{ $json.error || 'Unknown error' }}\n\nPlease check n8n logs.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "error-notify",
+      "name": "[Telegram] - Error Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1700, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "BK Accounting Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "[Trigger] - Monthly Schedule (1st 9AM)": {
+      "main": [
+        [
+          {
+            "node": "[Setup] - Initialize Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Trigger] - Manual Webhook": {
+      "main": [
+        [
+          {
+            "node": "[Setup] - Initialize Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Setup] - Initialize Entities": {
+      "main": [
+        [
+          {
+            "node": "[Split] - Process Each Entity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Split] - Process Each Entity": {
+      "main": [
+        [
+          {
+            "node": "[Fetch] - Google Sheets Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[Fetch] - DB Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[Check] - All Entities Done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Fetch] - Google Sheets Data": {
+      "main": [
+        [
+          {
+            "node": "[Merge] - Combine Data Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Fetch] - DB Transactions": {
+      "main": [
+        [
+          {
+            "node": "[Merge] - Combine Data Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Merge] - Combine Data Sources": {
+      "main": [
+        [
+          {
+            "node": "[Claude] - Classify Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Claude] - Classify Transactions": {
+      "main": [
+        [
+          {
+            "node": "[Merge] - Apply Classifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Merge] - Apply Classifications": {
+      "main": [
+        [
+          {
+            "node": "[DB] - Save Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DB] - Save Transactions": {
+      "main": [
+        [
+          {
+            "node": "[Python] - Generate Excel",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[Python] - Generate PowerPoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Generate Excel": {
+      "main": [
+        [
+          {
+            "node": "[Drive] - Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Generate PowerPoint": {
+      "main": [
+        [
+          {
+            "node": "[Drive] - Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Drive] - Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Send Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "[DB] - Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Telegram] - Send Notification": {
+      "main": [
+        [
+          {
+            "node": "[Split] - Process Each Entity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Check] - All Entities Done?": {
+      "main": [
+        [
+          {
+            "node": "[Python] - Generate Consolidated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Python] - Generate Consolidated": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Final Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[Error] - Handle Errors": {
+      "main": [
+        [
+          {
+            "node": "[Telegram] - Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "monthly",
+      "name": "Monthly"
+    },
+    {
+      "id": "pl",
+      "name": "P&L"
+    }
+  ],
+  "triggerCount": 2,
+  "updatedAt": "2025-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

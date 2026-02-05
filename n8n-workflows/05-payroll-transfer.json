@@ -1,0 +1,415 @@
+{
+  "name": "05 - Payroll Transfer Template",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 13,27 * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-payroll",
+      "name": "Cron - Payroll Days",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "Trigger on 13th and 27th (day before payroll)"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "payroll-trigger",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-manual",
+      "name": "Webhook - Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "webhookId": "payroll-manual",
+      "notes": "Manual trigger for payroll processing"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "entities",
+              "value": "={{ $env.PAYROLL_ENTITIES || 'solaire,cod,royce,manila_junket,tours,midori' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-entities",
+      "name": "Set - Entities",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [500, 400],
+      "notes": "Set entities to process"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "entities",
+        "options": {
+          "splitOutFieldName": "entity"
+        }
+      },
+      "id": "split-entities",
+      "name": "Split - By Entity",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [700, 400],
+      "notes": "Process each entity"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  e.employee_id,\n  e.employee_name,\n  e.bank_name,\n  e.account_number,\n  e.department,\n  p.net_pay\nFROM employees e\nJOIN payroll p ON e.employee_id = p.employee_id\nWHERE e.entity = '{{ $json.entity }}'\n  AND e.status = 'active'\n  AND p.payroll_period = TO_CHAR(CURRENT_DATE, 'YYYY-MM')\n  AND p.status = 'approved'\nORDER BY e.department, e.employee_name",
+        "options": {}
+      },
+      "id": "db-get-payroll",
+      "name": "DB - Get Payroll Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [900, 400],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Fetch approved payroll data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-has-payroll",
+      "name": "IF - Has Payroll",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1100, 400],
+      "notes": "Check if payroll data exists"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom datetime import date\nfrom bank import UnionBankTemplateGenerator, TransferType\nfrom decimal import Decimal\n\ndata = json.loads(sys.argv[1])\nentity = data['entity']\npayroll_data = data['payroll']\n\ngenerator = UnionBankTemplateGenerator('/opt/accounting-automation/config')\n\ntemplate, batch = generator.create_payroll_template(\n    entity=entity,\n    payroll_data=payroll_data,\n    transfer_date=date.today() + timedelta(days=1)\n)\n\nsummary = generator.generate_summary(batch)\n\nprint(json.dumps({\n    'batch_id': batch.batch_id,\n    'entity': entity,\n    'filename': template.filename,\n    'content': template.content,\n    'checksum': template.checksum,\n    'total_amount': float(batch.total_amount),\n    'entry_count': batch.entry_count,\n    'summary': summary\n}))\n\" '{{ JSON.stringify({entity: $json.entity, payroll: $json}) }}'"
+      },
+      "id": "python-generate-template",
+      "name": "Python - Generate Template",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1300, 300],
+      "notes": "Generate UnionBank CSV template"
+    },
+    {
+      "parameters": {
+        "fileName": "={{ $json.filename }}",
+        "fileContent": "={{ $json.content }}",
+        "options": {}
+      },
+      "id": "create-file",
+      "name": "Create File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [1500, 300],
+      "notes": "Create CSV file"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "fileId": "={{ $env.GOOGLE_DRIVE_PAYROLL_FOLDER }}",
+        "name": "={{ $json.filename }}",
+        "folderId": "={{ $env.GOOGLE_DRIVE_PAYROLL_FOLDER }}",
+        "options": {
+          "driveId": "={{ $env.GOOGLE_SHARED_DRIVE_ID }}"
+        }
+      },
+      "id": "drive-upload",
+      "name": "Google Drive - Upload",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1700, 300],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive-creds",
+          "name": "Google Drive"
+        }
+      },
+      "notes": "Upload template to Google Drive"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_PAYROLL_CHAT }}",
+        "text": "📋 *Payroll Template Ready*\n\n*Entity:* {{ $json.entity.toUpperCase() }}\n*Employees:* {{ $json.entry_count }}\n*Total Amount:* ₱{{ $json.total_amount.toLocaleString() }}\n*Batch ID:* `{{ $json.batch_id }}`\n\n_Template uploaded to Google Drive_\n\n⚠️ *Please review and upload to UnionBank portal*",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "replyMarkup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "✅ Mark Uploaded",
+                  "callback_data": "payroll_uploaded_{{ $json.batch_id }}"
+                },
+                {
+                  "text": "❌ Cancel",
+                  "callback_data": "payroll_cancel_{{ $json.batch_id }}"
+                }
+              ],
+              [
+                {
+                  "text": "📊 View Summary",
+                  "callback_data": "payroll_summary_{{ $json.batch_id }}"
+                }
+              ]
+            ]
+          }
+        }
+      },
+      "id": "telegram-notify",
+      "name": "Telegram - Notify Payroll",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1900, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send template notification with approval buttons"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, entity, details, status)\nVALUES (\n  'payroll_template_generated',\n  '{{ $json.entity }}',\n  '{{ JSON.stringify({batch_id: $json.batch_id, total: $json.total_amount, count: $json.entry_count}) }}',\n  'success'\n)",
+        "options": {}
+      },
+      "id": "db-audit-log",
+      "name": "DB - Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1900, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Log template generation"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "ℹ️ *No Payroll Data*\n\nNo approved payroll found for {{ $json.entity.toUpperCase() }} this period.\n\nPlease check if payroll has been approved.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-no-data",
+      "name": "Telegram - No Data",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1300, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Notify if no payroll data"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({success: true, batch_id: $json.batch_id}) }}"
+      },
+      "id": "respond-success",
+      "name": "Respond - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2100, 300],
+      "notes": "Return success response"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "❌ *Payroll Template Error*\n\nEntity: {{ $json.entity }}\nError: {{ $json.error?.message }}\nTime: {{ new Date().toISOString() }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-error",
+      "name": "Telegram - Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1700, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Error notification"
+    }
+  ],
+  "connections": {
+    "Cron - Payroll Days": {
+      "main": [
+        [
+          {
+            "node": "Set - Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set - Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Entities": {
+      "main": [
+        [
+          {
+            "node": "Split - By Entity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split - By Entity": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Payroll Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Payroll Data": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Payroll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Payroll": {
+      "main": [
+        [
+          {
+            "node": "Python - Generate Template",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - No Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Generate Template": {
+      "main": [
+        [
+          {
+            "node": "Create File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create File": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Upload": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Notify Payroll",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Notify Payroll": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "Asia/Manila"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "payroll",
+      "id": "9"
+    },
+    {
+      "name": "banking",
+      "id": "10"
+    }
+  ],
+  "triggerCount": 2,
+  "pinData": {},
+  "versionId": "1"
+}

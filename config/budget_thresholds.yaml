@@ -1,0 +1,199 @@
+# =============================================================================
+# Budget Thresholds Configuration
+# =============================================================================
+# Defines alert thresholds for budget monitoring
+# Alerts are sent via Telegram when thresholds are breached
+# =============================================================================
+
+metadata:
+  version: "1.0"
+  last_updated: "2025-01-01"
+  learning_mode: true  # Q1 2025: alerts only, no blocking
+  learning_mode_end: "2025-03-31"
+
+# -----------------------------------------------------------------------------
+# Global Alert Thresholds
+# -----------------------------------------------------------------------------
+# Alerts are triggered when actual spending reaches these percentages of budget
+thresholds:
+  warning:
+    percentage: 70
+    severity: low
+    notify:
+      - telegram_group
+    message_template: |
+      ⚠️ Budget Warning: {entity}
+      Account: {account_name}
+      Spent: ₱{actual:,.2f} / ₱{budget:,.2f} ({pct}%)
+      Remaining: ₱{remaining:,.2f}
+
+  critical:
+    percentage: 90
+    severity: medium
+    notify:
+      - telegram_group
+      - telegram_admin
+    message_template: |
+      🟠 Budget Critical: {entity}
+      Account: {account_name}
+      Spent: ₱{actual:,.2f} / ₱{budget:,.2f} ({pct}%)
+      Remaining: ₱{remaining:,.2f}
+      Action needed before month end.
+
+  exceeded:
+    percentage: 100
+    severity: high
+    notify:
+      - telegram_group
+      - telegram_admin
+      - email_admin
+    message_template: |
+      🔴 Budget Exceeded: {entity}
+      Account: {account_name}
+      Spent: ₱{actual:,.2f} / ₱{budget:,.2f} ({pct}%)
+      Over budget by: ₱{over_amount:,.2f}
+      Requires management approval for additional spending.
+
+# -----------------------------------------------------------------------------
+# Account-Specific Overrides
+# -----------------------------------------------------------------------------
+# Some accounts may need different thresholds
+account_overrides:
+  # Salaries are predictable - only alert if significantly over
+  "7010":  # Salaries & Wages
+    warning: 95
+    critical: 100
+    exceeded: 105
+
+  # Utilities can fluctuate - lower warning threshold
+  "6320":  # Utilities - Electricity
+    warning: 60
+    critical: 80
+    exceeded: 100
+
+  # Meals & Entertainment - stricter control
+  "6230":  # Meals & Entertainment
+    warning: 50
+    critical: 75
+    exceeded: 90
+
+  # Fuel costs - variable, moderate thresholds
+  "6410":  # Fuel & Gas
+    warning: 65
+    critical: 85
+    exceeded: 100
+
+# -----------------------------------------------------------------------------
+# Entity-Specific Overrides
+# -----------------------------------------------------------------------------
+entity_overrides:
+  midori:
+    # Retail has more variable costs
+    default_warning: 75
+    default_critical: 90
+    default_exceeded: 110
+
+  tours:
+    # Tour operations have seasonal variation
+    default_warning: 60
+    default_critical: 85
+    default_exceeded: 100
+
+# -----------------------------------------------------------------------------
+# Alert Cooldown Settings
+# -----------------------------------------------------------------------------
+# Prevent alert spam
+cooldown:
+  same_threshold_hours: 24    # Don't re-alert same threshold for 24 hours
+  escalation_hours: 4         # Wait 4 hours before escalating to next level
+  daily_summary_time: "18:00" # Send daily budget summary at 6 PM
+
+# -----------------------------------------------------------------------------
+# Auto-Approval Thresholds
+# -----------------------------------------------------------------------------
+# Expenses under these amounts can be auto-approved (when learning_mode is false)
+auto_approval:
+  enabled: true
+  max_amount: 10000  # ₱10,000 PHP
+  excluded_categories:
+    - company_car  # Always require approval for company car expenses
+    - entertainment  # Always require approval for entertainment
+  excluded_accounts:
+    - "6230"  # Meals & Entertainment
+    - "6630"  # Consulting fees
+  require_receipt: true
+  require_budget_available: true
+
+# -----------------------------------------------------------------------------
+# Budget Suggestions (Claude-based)
+# -----------------------------------------------------------------------------
+# Settings for AI-powered budget recommendations
+budget_suggestions:
+  enabled: true
+  lookback_months: 6  # Analyze past 6 months for suggestions
+  suggestion_timing: "monthly"  # Generate suggestions monthly
+  suggestion_day: 25  # Generate on 25th of each month for next month
+  factors:
+    - historical_average
+    - seasonal_adjustment
+    - growth_rate
+    - inflation_adjustment
+  inflation_rate: 0.05  # 5% annual inflation assumption
+
+# -----------------------------------------------------------------------------
+# Notification Channels
+# -----------------------------------------------------------------------------
+notification_channels:
+  telegram_group:
+    type: telegram
+    chat_id: "${TELEGRAM_GROUP_CHAT_ID}"
+    enabled: true
+    min_severity: low
+
+  telegram_admin:
+    type: telegram
+    user_ids: "${TELEGRAM_ADMIN_IDS}"
+    enabled: true
+    min_severity: medium
+
+  email_admin:
+    type: email
+    addresses:
+      - admin@bkkeyforce.com
+    enabled: false  # Enable when email is configured
+    min_severity: high
+
+# -----------------------------------------------------------------------------
+# Reporting
+# -----------------------------------------------------------------------------
+reporting:
+  daily_summary:
+    enabled: true
+    time: "18:30"
+    include_entities: all
+    channels:
+      - telegram_group
+
+  weekly_summary:
+    enabled: true
+    day: monday
+    time: "09:00"
+    include:
+      - budget_vs_actual
+      - top_spending_categories
+      - alerts_summary
+    channels:
+      - telegram_group
+      - telegram_admin
+
+  monthly_summary:
+    enabled: true
+    day: 1  # First of the month
+    time: "10:00"
+    include:
+      - previous_month_summary
+      - budget_accuracy
+      - recommendations
+    channels:
+      - telegram_group
+      - telegram_admin

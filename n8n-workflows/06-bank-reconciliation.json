@@ -1,0 +1,494 @@
+{
+  "name": "06 - Bank Reconciliation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily",
+      "name": "Cron - Daily 7AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "Daily bank reconciliation"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bank-recon",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-manual",
+      "name": "Webhook - Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "webhookId": "bank-recon-manual",
+      "notes": "Manual reconciliation trigger"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "bank_accounts",
+              "value": "={{ $env.BANK_ACCOUNTS || 'UB_MAIN,UB_PAYROLL,BDO_OPERATIONS' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-accounts",
+      "name": "Set - Bank Accounts",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [500, 400],
+      "notes": "Set accounts to reconcile"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "bank_accounts",
+        "options": {
+          "splitOutFieldName": "account"
+        }
+      },
+      "id": "split-accounts",
+      "name": "Split - By Account",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [700, 400],
+      "notes": "Process each account"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  ba.bank_code,\n  ba.account_number,\n  ba.account_name,\n  ba.entity,\n  ba.last_reconciled_date,\n  ba.last_balance\nFROM bank_accounts ba\nWHERE ba.account_id = '{{ $json.account }}'",
+        "options": {}
+      },
+      "id": "db-get-account",
+      "name": "DB - Get Account Info",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [900, 400],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Get bank account details"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.bank_code }}",
+              "operation": "equals",
+              "value2": "unionbank"
+            }
+          ]
+        }
+      },
+      "id": "switch-bank",
+      "name": "Switch - Bank Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [1100, 400],
+      "notes": "Route by bank"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.UB_API_URL }}/accounts/{{ $json.account_number }}/transactions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "from_date",
+              "value": "={{ $json.last_reconciled_date || new Date(Date.now() - 30*24*60*60*1000).toISOString().split('T')[0] }}"
+            },
+            {
+              "name": "to_date",
+              "value": "={{ new Date().toISOString().split('T')[0] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-ub-api",
+      "name": "HTTP - UnionBank API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1300, 300],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "ub-oauth-creds",
+          "name": "UnionBank OAuth"
+        }
+      },
+      "notes": "Fetch transactions from UnionBank API"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom bank import BankPortalAutomation, BankCredentials\nfrom datetime import date, timedelta\nimport os\n\ndata = json.loads(sys.argv[1])\n\ncreds = BankCredentials(\n    bank='bdo',\n    username=os.environ.get('BDO_USERNAME'),\n    password=os.environ.get('BDO_PASSWORD')\n)\n\nautomation = BankPortalAutomation(headless=True)\n\nresult = automation.download_statement_sync(\n    credentials=creds,\n    account_number=data['account_number'],\n    start_date=date.fromisoformat(data['start_date']),\n    end_date=date.today(),\n    output_dir='/tmp/bank_statements'\n)\n\nprint(json.dumps(result.to_dict()))\n\" '{{ JSON.stringify({account_number: $json.account_number, start_date: $json.last_reconciled_date}) }}'"
+      },
+      "id": "rpa-bdo",
+      "name": "RPA - BDO Statement",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1300, 500],
+      "notes": "Download BDO statement via RPA"
+    },
+    {
+      "parameters": {
+        "command": "cd /opt/accounting-automation/python && python -c \"\nimport json\nimport sys\nfrom datetime import date, timedelta\nfrom decimal import Decimal\nfrom bank import BankReconciliation, BankTransaction, BookTransaction\n\ndata = json.loads(sys.argv[1])\nentity = data['entity']\naccount = data['account_number']\nbank_txns_raw = data['bank_transactions']\n\n# Parse bank transactions\nbank_txns = []\nfor t in bank_txns_raw:\n    bank_txns.append(BankTransaction(\n        id=t.get('reference') or str(hash(f\\\"{t['date']}{t['amount']}\\\")),\n        date=date.fromisoformat(t['date']),\n        description=t.get('description', ''),\n        amount=Decimal(str(t['amount'])),\n        balance=Decimal(str(t.get('balance', 0))) if t.get('balance') else None,\n        reference=t.get('reference')\n    ))\n\nrecon = BankReconciliation('/opt/accounting-automation/config')\n\nresult = recon.auto_reconcile_from_db(\n    entity=entity,\n    account=account,\n    bank_transactions=bank_txns,\n    period_start=date.today() - timedelta(days=30),\n    period_end=date.today()\n)\n\nreport = recon.format_report(result)\n\nprint(json.dumps({\n    'success': True,\n    'report': report,\n    'summary': result.to_dict()\n}))\n\" '{{ JSON.stringify({entity: $json.entity, account_number: $json.account_number, bank_transactions: $json.transactions}) }}'"
+      },
+      "id": "python-reconcile",
+      "name": "Python - Reconcile",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1550, 400],
+      "notes": "Run reconciliation"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.summary.is_reconciled }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-reconciled",
+      "name": "IF - Is Reconciled",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1800, 400],
+      "notes": "Check reconciliation status"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ACCOUNTING_CHAT }}",
+        "text": "={{ $json.report }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-success",
+      "name": "Telegram - Reconciliation Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2050, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send success report"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ACCOUNTING_CHAT }}",
+        "text": "={{ $json.report }}\n\n⚠️ *Manual review required*\nUnmatched items need attention.",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "replyMarkup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "📋 View Unmatched",
+                  "callback_data": "recon_unmatched_{{ $json.summary.entity }}"
+                },
+                {
+                  "text": "✅ Mark Reviewed",
+                  "callback_data": "recon_reviewed_{{ $json.summary.entity }}"
+                }
+              ]
+            ]
+          }
+        }
+      },
+      "id": "telegram-review",
+      "name": "Telegram - Review Required",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2050, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Send review required notification"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE bank_accounts \nSET last_reconciled_date = CURRENT_DATE,\n    last_balance = {{ $json.summary.bank_closing }}\nWHERE account_number = '{{ $json.summary.account }}'",
+        "options": {}
+      },
+      "id": "db-update-status",
+      "name": "DB - Update Recon Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2300, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Update last reconciled date"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, entity, details, status)\nVALUES (\n  'bank_reconciliation',\n  '{{ $json.summary.entity }}',\n  '{{ JSON.stringify($json.summary) }}',\n  '{{ $json.summary.is_reconciled ? \"success\" : \"warning\" }}'\n)",
+        "options": {}
+      },
+      "id": "db-audit-log",
+      "name": "DB - Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2300, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      },
+      "notes": "Log reconciliation result"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({success: true, reconciled: $json.summary.is_reconciled, match_rate: $json.summary.match_rate}) }}"
+      },
+      "id": "respond-success",
+      "name": "Respond - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2500, 400],
+      "notes": "Return response"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_IDS.split(',')[0] }}",
+        "text": "❌ *Bank Reconciliation Error*\n\nAccount: {{ $json.account }}\nError: {{ $json.error?.message }}\nTime: {{ new Date().toISOString() }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-error",
+      "name": "Telegram - Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2050, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      },
+      "notes": "Error notification"
+    }
+  ],
+  "connections": {
+    "Cron - Daily 7AM": {
+      "main": [
+        [
+          {
+            "node": "Set - Bank Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set - Bank Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Bank Accounts": {
+      "main": [
+        [
+          {
+            "node": "Split - By Account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split - By Account": {
+      "main": [
+        [
+          {
+            "node": "DB - Get Account Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Get Account Info": {
+      "main": [
+        [
+          {
+            "node": "Switch - Bank Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Bank Type": {
+      "main": [
+        [
+          {
+            "node": "HTTP - UnionBank API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RPA - BDO Statement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - UnionBank API": {
+      "main": [
+        [
+          {
+            "node": "Python - Reconcile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RPA - BDO Statement": {
+      "main": [
+        [
+          {
+            "node": "Python - Reconcile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python - Reconcile": {
+      "main": [
+        [
+          {
+            "node": "IF - Is Reconciled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Is Reconciled": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Reconciliation Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram - Review Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Reconciliation Success": {
+      "main": [
+        [
+          {
+            "node": "DB - Update Recon Status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram - Review Required": {
+      "main": [
+        [
+          {
+            "node": "DB - Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB - Update Recon Status": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "Asia/Manila"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "banking",
+      "id": "10"
+    },
+    {
+      "name": "reconciliation",
+      "id": "11"
+    }
+  ],
+  "triggerCount": 2,
+  "pinData": {},
+  "versionId": "1"
+}

@@ -1,0 +1,529 @@
+# =============================================================================
+# Chart of Accounts - BK Keyforce / BETRNK Group
+# =============================================================================
+# Master chart of accounts for all 6 entities
+# Used by Claude API for transaction classification
+# =============================================================================
+
+metadata:
+  version: "1.0"
+  last_updated: "2025-01-01"
+  currency: PHP
+  fiscal_year_end: December
+
+# -----------------------------------------------------------------------------
+# Assets (1000-1999)
+# -----------------------------------------------------------------------------
+assets:
+  current_assets:
+    - code: "1010"
+      name: "Cash on Hand"
+      type: asset
+      subtype: current
+
+    - code: "1020"
+      name: "Cash in Bank - Operating"
+      type: asset
+      subtype: current
+
+    - code: "1021"
+      name: "Cash in Bank - UnionBank"
+      type: asset
+      subtype: current
+
+    - code: "1022"
+      name: "Cash in Bank - BDO"
+      type: asset
+      subtype: current
+
+    - code: "1023"
+      name: "Cash in Bank - GCash"
+      type: asset
+      subtype: current
+
+    - code: "1030"
+      name: "Accounts Receivable"
+      type: asset
+      subtype: current
+
+    - code: "1040"
+      name: "Advances to Officers"
+      type: asset
+      subtype: current
+
+    - code: "1050"
+      name: "Prepaid Expenses"
+      type: asset
+      subtype: current
+
+    - code: "1060"
+      name: "Inventory"
+      type: asset
+      subtype: current
+      description: "For Midori no Mart retail inventory"
+
+  fixed_assets:
+    - code: "1510"
+      name: "Furniture & Fixtures"
+      type: asset
+      subtype: fixed
+
+    - code: "1520"
+      name: "Office Equipment"
+      type: asset
+      subtype: fixed
+
+    - code: "1530"
+      name: "Computer Equipment"
+      type: asset
+      subtype: fixed
+
+    - code: "1540"
+      name: "Motor Vehicles"
+      type: asset
+      subtype: fixed
+
+    - code: "1550"
+      name: "Leasehold Improvements"
+      type: asset
+      subtype: fixed
+
+    - code: "1610"
+      name: "Accumulated Depreciation - F&F"
+      type: asset
+      subtype: contra
+
+    - code: "1620"
+      name: "Accumulated Depreciation - Equipment"
+      type: asset
+      subtype: contra
+
+    - code: "1630"
+      name: "Accumulated Depreciation - Computers"
+      type: asset
+      subtype: contra
+
+    - code: "1640"
+      name: "Accumulated Depreciation - Vehicles"
+      type: asset
+      subtype: contra
+
+# -----------------------------------------------------------------------------
+# Liabilities (2000-2999)
+# -----------------------------------------------------------------------------
+liabilities:
+  current_liabilities:
+    - code: "2010"
+      name: "Accounts Payable"
+      type: liability
+      subtype: current
+
+    - code: "2020"
+      name: "Accrued Expenses"
+      type: liability
+      subtype: current
+
+    - code: "2030"
+      name: "Salaries Payable"
+      type: liability
+      subtype: current
+
+    - code: "2040"
+      name: "Withholding Tax Payable"
+      type: liability
+      subtype: current
+
+    - code: "2050"
+      name: "SSS Payable"
+      type: liability
+      subtype: current
+
+    - code: "2051"
+      name: "PhilHealth Payable"
+      type: liability
+      subtype: current
+
+    - code: "2052"
+      name: "Pag-IBIG Payable"
+      type: liability
+      subtype: current
+
+    - code: "2060"
+      name: "VAT Payable"
+      type: liability
+      subtype: current
+
+    - code: "2070"
+      name: "Income Tax Payable"
+      type: liability
+      subtype: current
+
+  long_term_liabilities:
+    - code: "2510"
+      name: "Loans Payable"
+      type: liability
+      subtype: long_term
+
+# -----------------------------------------------------------------------------
+# Equity (3000-3999)
+# -----------------------------------------------------------------------------
+equity:
+  - code: "3010"
+    name: "Capital Stock"
+    type: equity
+
+  - code: "3020"
+    name: "Additional Paid-in Capital"
+    type: equity
+
+  - code: "3030"
+    name: "Retained Earnings"
+    type: equity
+
+  - code: "3040"
+    name: "Current Year Earnings"
+    type: equity
+
+# -----------------------------------------------------------------------------
+# Revenue (4000-4999)
+# -----------------------------------------------------------------------------
+revenue:
+  operating_revenue:
+    - code: "4010"
+      name: "Gaming Revenue"
+      type: revenue
+      subtype: operating
+      entities: [solaire, cod, royce, manila_junket]
+      category: revenue
+
+    - code: "4020"
+      name: "Rolling Commission Income"
+      type: revenue
+      subtype: operating
+      entities: [solaire, cod, royce, manila_junket]
+      category: revenue
+
+    - code: "4030"
+      name: "Tour Package Revenue"
+      type: revenue
+      subtype: operating
+      entities: [tours]
+      category: revenue
+
+    - code: "4040"
+      name: "Retail Sales"
+      type: revenue
+      subtype: operating
+      entities: [midori]
+      category: revenue
+
+    - code: "4050"
+      name: "Service Income"
+      type: revenue
+      subtype: operating
+      category: revenue
+
+  other_revenue:
+    - code: "4510"
+      name: "Interest Income"
+      type: revenue
+      subtype: other
+      category: revenue
+
+    - code: "4520"
+      name: "Foreign Exchange Gain"
+      type: revenue
+      subtype: other
+      category: revenue
+
+    - code: "4530"
+      name: "Other Income"
+      type: revenue
+      subtype: other
+      category: revenue
+
+# -----------------------------------------------------------------------------
+# Cost of Sales (5000-5999)
+# -----------------------------------------------------------------------------
+cost_of_sales:
+  - code: "5100"
+    name: "Junket Commission Expense"
+    type: expense
+    subtype: cos
+    entities: [solaire, cod, royce, manila_junket]
+    category: commission
+    description: "Rolling/junket commissions paid to partners"
+
+  - code: "5200"
+    name: "Accommodation Costs"
+    type: expense
+    subtype: cos
+    entities: [tours]
+    category: cos
+
+  - code: "5210"
+    name: "Transportation Costs"
+    type: expense
+    subtype: cos
+    entities: [tours]
+    category: cos
+
+  - code: "5300"
+    name: "Cost of Goods Sold"
+    type: expense
+    subtype: cos
+    entities: [midori]
+    category: cos
+
+  - code: "5400"
+    name: "Direct Labor"
+    type: expense
+    subtype: cos
+    category: cos
+
+# -----------------------------------------------------------------------------
+# Operating Expenses (6000-6999)
+# -----------------------------------------------------------------------------
+operating_expenses:
+  # Office & Administrative
+  office_admin:
+    - code: "6210"
+      name: "Office Supplies"
+      type: expense
+      category: expense
+
+    - code: "6220"
+      name: "General Supplies"
+      type: expense
+      category: expense
+
+    - code: "6230"
+      name: "Meals & Entertainment"
+      type: expense
+      category: expense
+      budget_threshold: true
+
+  # Utilities
+  utilities:
+    - code: "6310"
+      name: "Telecommunications"
+      type: expense
+      category: expense
+
+    - code: "6320"
+      name: "Utilities - Electricity"
+      type: expense
+      category: expense
+
+    - code: "6321"
+      name: "Utilities - Water"
+      type: expense
+      category: expense
+
+    - code: "6350"
+      name: "Cloud Services"
+      type: expense
+      category: expense
+
+    - code: "6351"
+      name: "Software Subscriptions"
+      type: expense
+      category: expense
+
+  # Transportation & Vehicles
+  transportation:
+    - code: "6410"
+      name: "Fuel & Gas"
+      type: expense
+      category: company_car
+      budget_threshold: true
+
+    - code: "6420"
+      name: "Transportation"
+      type: expense
+      category: expense
+
+    - code: "6430"
+      name: "Tolls & Parking"
+      type: expense
+      category: company_car
+
+    - code: "6440"
+      name: "Vehicle Maintenance"
+      type: expense
+      category: company_car
+
+    - code: "6450"
+      name: "Vehicle Insurance"
+      type: expense
+      category: company_car
+
+  # Financial
+  financial:
+    - code: "6510"
+      name: "Bank Charges"
+      type: expense
+      category: bank_charge
+
+    - code: "6520"
+      name: "Interest Expense"
+      type: expense
+      category: bank_charge
+
+    - code: "6521"
+      name: "Penalties & Fees"
+      type: expense
+      category: bank_charge
+
+  # Professional Services
+  professional:
+    - code: "6610"
+      name: "Professional Fees - Audit"
+      type: expense
+      category: expense
+
+    - code: "6620"
+      name: "Professional Fees - Legal"
+      type: expense
+      category: expense
+
+    - code: "6630"
+      name: "Professional Fees - Consulting"
+      type: expense
+      category: expense
+
+  # Insurance
+  insurance:
+    - code: "6710"
+      name: "Insurance"
+      type: expense
+      category: expense
+
+  # Taxes & Licenses
+  taxes:
+    - code: "6810"
+      name: "Taxes & Licenses"
+      type: expense
+      category: expense
+
+    - code: "6820"
+      name: "Government Contributions"
+      type: expense
+      category: expense
+
+  # Gaming Specific
+  gaming:
+    - code: "6910"
+      name: "Gaming Regulatory Fees"
+      type: expense
+      entities: [solaire, cod, royce, manila_junket]
+      category: expense
+
+    - code: "6920"
+      name: "PAGCOR License Fees"
+      type: expense
+      entities: [solaire, cod, royce, manila_junket]
+      category: expense
+
+# -----------------------------------------------------------------------------
+# Personnel Expenses (7000-7999)
+# -----------------------------------------------------------------------------
+personnel_expenses:
+  - code: "7010"
+    name: "Salaries & Wages"
+    type: expense
+    category: salary
+    budget_threshold: true
+
+  - code: "7020"
+    name: "13th Month Pay"
+    type: expense
+    category: salary
+
+  - code: "7030"
+    name: "Bonuses & Incentives"
+    type: expense
+    category: salary
+
+  - code: "7040"
+    name: "Overtime Pay"
+    type: expense
+    category: salary
+
+  - code: "7050"
+    name: "SSS Contribution - Employer"
+    type: expense
+    category: salary
+
+  - code: "7051"
+    name: "PhilHealth Contribution - Employer"
+    type: expense
+    category: salary
+
+  - code: "7052"
+    name: "Pag-IBIG Contribution - Employer"
+    type: expense
+    category: salary
+
+  - code: "7060"
+    name: "Employee Benefits"
+    type: expense
+    category: salary
+
+  - code: "7070"
+    name: "Training & Development"
+    type: expense
+    category: expense
+
+# -----------------------------------------------------------------------------
+# Depreciation (8000-8999)
+# -----------------------------------------------------------------------------
+depreciation:
+  - code: "8010"
+    name: "Depreciation - Furniture & Fixtures"
+    type: expense
+    category: depreciation
+
+  - code: "8020"
+    name: "Depreciation - Equipment"
+    type: expense
+    category: depreciation
+
+  - code: "8030"
+    name: "Depreciation - Computers"
+    type: expense
+    category: depreciation
+
+  - code: "8040"
+    name: "Depreciation - Vehicles"
+    type: expense
+    category: depreciation
+
+  - code: "8050"
+    name: "Amortization - Leasehold"
+    type: expense
+    category: depreciation
+
+# -----------------------------------------------------------------------------
+# Other Expenses (9000-9999)
+# -----------------------------------------------------------------------------
+other_expenses:
+  - code: "9010"
+    name: "Foreign Exchange Loss"
+    type: expense
+    category: expense
+
+  - code: "9020"
+    name: "Bad Debt Expense"
+    type: expense
+    category: expense
+
+  - code: "9030"
+    name: "Miscellaneous Expense"
+    type: expense
+    category: expense
+
+  - code: "9910"
+    name: "Income Tax Expense"
+    type: expense
+    category: expense

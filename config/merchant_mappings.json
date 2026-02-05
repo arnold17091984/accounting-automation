@@ -1,0 +1,273 @@
+{
+  "_metadata": {
+    "version": "1.0",
+    "last_updated": "2025-01-01",
+    "description": "Quick lookup for known merchants. Supplements database merchant_lookup table."
+  },
+  "exact_matches": {
+    "PLDT": {
+      "account_code": "6310",
+      "account_name": "Telecommunications",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "GLOBE TELECOM": {
+      "account_code": "6310",
+      "account_name": "Telecommunications",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "MERALCO": {
+      "account_code": "6320",
+      "account_name": "Utilities - Electricity",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "MANILA WATER": {
+      "account_code": "6321",
+      "account_name": "Utilities - Water",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "MAYNILAD": {
+      "account_code": "6321",
+      "account_name": "Utilities - Water",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "SHELL": {
+      "account_code": "6410",
+      "account_name": "Fuel & Gas",
+      "category": "company_car",
+      "confidence": 1.0
+    },
+    "PETRON": {
+      "account_code": "6410",
+      "account_name": "Fuel & Gas",
+      "category": "company_car",
+      "confidence": 1.0
+    },
+    "CALTEX": {
+      "account_code": "6410",
+      "account_name": "Fuel & Gas",
+      "category": "company_car",
+      "confidence": 1.0
+    },
+    "EASYTRIP": {
+      "account_code": "6430",
+      "account_name": "Tolls & Parking",
+      "category": "company_car",
+      "confidence": 1.0
+    },
+    "AUTOSWEEP": {
+      "account_code": "6430",
+      "account_name": "Tolls & Parking",
+      "category": "company_car",
+      "confidence": 1.0
+    },
+    "GRABCAR": {
+      "account_code": "6420",
+      "account_name": "Transportation",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "GRABFOOD": {
+      "account_code": "6230",
+      "account_name": "Meals & Entertainment",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "FOODPANDA": {
+      "account_code": "6230",
+      "account_name": "Meals & Entertainment",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "STARBUCKS": {
+      "account_code": "6230",
+      "account_name": "Meals & Entertainment",
+      "category": "expense",
+      "confidence": 0.95
+    },
+    "JOLLIBEE": {
+      "account_code": "6230",
+      "account_name": "Meals & Entertainment",
+      "category": "expense",
+      "confidence": 0.95
+    },
+    "MCDONALDS": {
+      "account_code": "6230",
+      "account_name": "Meals & Entertainment",
+      "category": "expense",
+      "confidence": 0.95
+    },
+    "NATIONAL BOOK STORE": {
+      "account_code": "6210",
+      "account_name": "Office Supplies",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "OFFICE WAREHOUSE": {
+      "account_code": "6210",
+      "account_name": "Office Supplies",
+      "category": "expense",
+      "confidence": 1.0
+    },
+    "PAGCOR": {
+      "account_code": "6910",
+      "account_name": "Gaming Regulatory Fees",
+      "category": "expense",
+      "confidence": 1.0,
+      "entity_hint": ["solaire", "cod", "royce", "manila_junket"]
+    }
+  },
+  "pattern_matches": [
+    {
+      "pattern": "^BDO.*FEE",
+      "account_code": "6510",
+      "account_name": "Bank Charges",
+      "category": "bank_charge",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "^UNIONBANK.*FEE",
+      "account_code": "6510",
+      "account_name": "Bank Charges",
+      "category": "bank_charge",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "ANNUAL.*FEE",
+      "account_code": "6510",
+      "account_name": "Bank Charges",
+      "category": "bank_charge",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "FINANCE.*CHARGE",
+      "account_code": "6520",
+      "account_name": "Interest Expense",
+      "category": "bank_charge",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "INTEREST.*CHARGE",
+      "account_code": "6520",
+      "account_name": "Interest Expense",
+      "category": "bank_charge",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "LATE.*PAYMENT",
+      "account_code": "6521",
+      "account_name": "Penalties & Fees",
+      "category": "bank_charge",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "GOOGLE.*CLOUD",
+      "account_code": "6350",
+      "account_name": "Cloud Services",
+      "category": "expense",
+      "confidence": 0.95
+    },
+    {
+      "pattern": "AMAZON.*WEB.*SERVICE|AWS",
+      "account_code": "6350",
+      "account_name": "Cloud Services",
+      "category": "expense",
+      "confidence": 0.95
+    },
+    {
+      "pattern": "GRAB(?!CAR|FOOD)",
+      "account_code": "6420",
+      "account_name": "Transportation",
+      "category": "expense",
+      "confidence": 0.85
+    },
+    {
+      "pattern": "HOTEL|RESORT|INN",
+      "account_code": "5200",
+      "account_name": "Accommodation Costs",
+      "category": "cos",
+      "confidence": 0.75,
+      "entity_hint": ["tours"]
+    },
+    {
+      "pattern": "AGODA|BOOKING\\.COM|AIRBNB|EXPEDIA",
+      "account_code": "5200",
+      "account_name": "Accommodation Costs",
+      "category": "cos",
+      "confidence": 0.95,
+      "entity_hint": ["tours"]
+    },
+    {
+      "pattern": "COMMISSION|ROLLING|REBATE",
+      "account_code": "5100",
+      "account_name": "Junket Commission Expense",
+      "category": "commission",
+      "confidence": 0.80,
+      "entity_hint": ["solaire", "cod", "royce", "manila_junket"]
+    },
+    {
+      "pattern": "SSS.*CONTRIBUTION|SSS.*PAYMENT",
+      "account_code": "7050",
+      "account_name": "SSS Contribution - Employer",
+      "category": "salary",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "PHILHEALTH.*CONTRIBUTION|PHILHEALTH.*PAYMENT",
+      "account_code": "7051",
+      "account_name": "PhilHealth Contribution - Employer",
+      "category": "salary",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "PAG-?IBIG.*CONTRIBUTION|HDMF.*PAYMENT",
+      "account_code": "7052",
+      "account_name": "Pag-IBIG Contribution - Employer",
+      "category": "salary",
+      "confidence": 1.0
+    },
+    {
+      "pattern": "SALARY|PAYROLL|WAGES",
+      "account_code": "7010",
+      "account_name": "Salaries & Wages",
+      "category": "salary",
+      "confidence": 0.90
+    }
+  ],
+  "entity_specific": {
+    "midori": {
+      "default_expense_account": "5300",
+      "default_expense_name": "Cost of Goods Sold",
+      "default_category": "cos",
+      "patterns": [
+        {
+          "pattern": "SUPPLIER|WHOLESALE|DISTRIBUTOR",
+          "account_code": "5300",
+          "account_name": "Cost of Goods Sold",
+          "category": "cos",
+          "confidence": 0.90
+        }
+      ]
+    },
+    "tours": {
+      "default_expense_account": "5200",
+      "default_expense_name": "Accommodation Costs",
+      "default_category": "cos",
+      "patterns": [
+        {
+          "pattern": "AIRLINE|CEBU.*PAC|PHIL.*AIR|AIR.*ASIA",
+          "account_code": "5210",
+          "account_name": "Transportation Costs",
+          "category": "cos",
+          "confidence": 0.95
+        }
+      ]
+    }
+  },
+  "low_confidence_threshold": 0.7,
+  "require_human_review_below": 0.5
+}

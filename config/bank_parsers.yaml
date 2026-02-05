@@ -1,0 +1,379 @@
+# =============================================================================
+# Bank CSV/Statement Parser Configuration
+# =============================================================================
+# Defines column mappings and parsing rules for each bank's export format
+# =============================================================================
+
+metadata:
+  version: "1.0"
+  last_updated: "2025-01-01"
+  supported_formats:
+    - csv
+    - xlsx
+    - pdf  # via Claude Vision OCR
+
+# -----------------------------------------------------------------------------
+# UnionBank
+# -----------------------------------------------------------------------------
+unionbank:
+  name: "UnionBank of the Philippines"
+  code: "unionbank"
+  formats:
+    csv:
+      encoding: "utf-8"
+      delimiter: ","
+      skip_rows: 1  # Skip header row
+      date_format: "%m/%d/%Y"
+      columns:
+        date:
+          index: 0
+          name: "Transaction Date"
+          required: true
+        description:
+          index: 1
+          name: "Description"
+          required: true
+        reference:
+          index: 2
+          name: "Reference Number"
+          required: false
+        debit:
+          index: 3
+          name: "Debit"
+          required: false
+          parse_as: decimal
+        credit:
+          index: 4
+          name: "Credit"
+          required: false
+          parse_as: decimal
+        balance:
+          index: 5
+          name: "Running Balance"
+          required: false
+          parse_as: decimal
+      amount_logic: "debit_credit_separate"  # or "single_column_signed"
+      debit_is_expense: true
+
+    xlsx:
+      sheet_name: "Statement"
+      skip_rows: 3
+      date_format: "%Y-%m-%d"
+      columns:
+        date:
+          column: "A"
+          name: "Date"
+        description:
+          column: "B"
+          name: "Particulars"
+        reference:
+          column: "C"
+          name: "Reference"
+        debit:
+          column: "D"
+          name: "Withdrawal"
+        credit:
+          column: "E"
+          name: "Deposit"
+        balance:
+          column: "F"
+          name: "Balance"
+      amount_logic: "debit_credit_separate"
+
+  merchant_extraction:
+    # Patterns to extract clean merchant name from description
+    patterns:
+      - regex: "POS PURCHASE - (.+?) - \\d+"
+        group: 1
+      - regex: "ONLINE TRANSFER TO (.+)"
+        group: 1
+      - regex: "INSTAPAY TO (.+?) \\d+"
+        group: 1
+      - regex: "BILLS PAYMENT - (.+)"
+        group: 1
+    cleanup:
+      - remove_numbers_at_end: true
+      - uppercase: true
+      - trim: true
+
+# -----------------------------------------------------------------------------
+# BDO
+# -----------------------------------------------------------------------------
+bdo:
+  name: "Banco de Oro"
+  code: "bdo"
+  formats:
+    csv:
+      encoding: "utf-8"
+      delimiter: ","
+      skip_rows: 1
+      date_format: "%d-%b-%Y"  # e.g., "15-Jan-2025"
+      columns:
+        date:
+          index: 0
+          name: "Posting Date"
+          required: true
+        transaction_date:
+          index: 1
+          name: "Transaction Date"
+          required: false
+        description:
+          index: 2
+          name: "Description"
+          required: true
+        reference:
+          index: 3
+          name: "Reference No."
+          required: false
+        amount:
+          index: 4
+          name: "Amount"
+          required: true
+          parse_as: decimal
+      amount_logic: "single_column_signed"  # Negative = expense, Positive = credit
+
+    pdf:
+      ocr_enabled: true
+      page_type: "credit_card_statement"
+      extraction_prompt: "pdf_ocr_extract.md"
+      expected_fields:
+        - date
+        - description
+        - merchant
+        - amount
+        - reference_number
+
+  credit_card:
+    statement_cycle_day: 15  # Statement closes on 15th
+    due_day_offset: 21  # Due 21 days after statement
+    formats:
+      pdf:
+        ocr_enabled: true
+        table_headers:
+          - "POSTING DATE"
+          - "TRANSACTION DATE"
+          - "DESCRIPTION"
+          - "AMOUNT"
+        date_format: "%m/%d"  # Month/Day only, year from statement
+        amount_format: "with_comma"  # e.g., "1,234.56"
+
+  merchant_extraction:
+    patterns:
+      - regex: "([A-Z][A-Z\\s]+)\\s+\\d{2}/\\d{2}"
+        group: 1
+      - regex: "POS - (.+)"
+        group: 1
+    cleanup:
+      - uppercase: true
+      - remove_trailing_numbers: true
+      - trim: true
+
+# -----------------------------------------------------------------------------
+# GCash
+# -----------------------------------------------------------------------------
+gcash:
+  name: "GCash"
+  code: "gcash"
+  formats:
+    csv:
+      encoding: "utf-8"
+      delimiter: ","
+      skip_rows: 1
+      date_format: "%b %d, %Y %I:%M %p"  # e.g., "Jan 15, 2025 2:30 PM"
+      columns:
+        date:
+          index: 0
+          name: "Date & Time"
+          required: true
+        transaction_type:
+          index: 1
+          name: "Type"
+          required: true
+        description:
+          index: 2
+          name: "Description"
+          required: true
+        reference:
+          index: 3
+          name: "Reference Number"
+          required: true
+        amount:
+          index: 4
+          name: "Amount"
+          required: true
+          parse_as: decimal
+        status:
+          index: 5
+          name: "Status"
+          required: false
+      amount_logic: "type_determines_sign"
+      expense_types:
+        - "PAYMENT"
+        - "SEND MONEY"
+        - "CASH OUT"
+        - "BILLS PAYMENT"
+      income_types:
+        - "RECEIVE MONEY"
+        - "CASH IN"
+        - "REFUND"
+
+  merchant_extraction:
+    patterns:
+      - regex: "Payment to (.+)"
+        group: 1
+      - regex: "Send Money to (.+)"
+        group: 1
+      - regex: "Bills Payment - (.+)"
+        group: 1
+    cleanup:
+      - uppercase: true
+      - trim: true
+
+# -----------------------------------------------------------------------------
+# Metrobank
+# -----------------------------------------------------------------------------
+metrobank:
+  name: "Metropolitan Bank & Trust Company"
+  code: "metrobank"
+  formats:
+    csv:
+      encoding: "utf-8"
+      delimiter: ","
+      skip_rows: 2
+      date_format: "%d/%m/%Y"
+      columns:
+        date:
+          index: 0
+          name: "Date"
+          required: true
+        description:
+          index: 1
+          name: "Description"
+          required: true
+        debit:
+          index: 2
+          name: "Debit"
+          required: false
+          parse_as: decimal
+        credit:
+          index: 3
+          name: "Credit"
+          required: false
+          parse_as: decimal
+        balance:
+          index: 4
+          name: "Balance"
+          required: false
+      amount_logic: "debit_credit_separate"
+
+# -----------------------------------------------------------------------------
+# BPI
+# -----------------------------------------------------------------------------
+bpi:
+  name: "Bank of the Philippine Islands"
+  code: "bpi"
+  formats:
+    csv:
+      encoding: "utf-8"
+      delimiter: ","
+      skip_rows: 1
+      date_format: "%m/%d/%Y"
+      columns:
+        date:
+          index: 0
+          name: "Date"
+          required: true
+        description:
+          index: 1
+          name: "Description"
+          required: true
+        amount:
+          index: 2
+          name: "Amount"
+          required: true
+          parse_as: decimal
+        balance:
+          index: 3
+          name: "Balance"
+          required: false
+      amount_logic: "single_column_signed"
+
+# -----------------------------------------------------------------------------
+# Generic Fallback Parser
+# -----------------------------------------------------------------------------
+generic:
+  name: "Generic CSV Parser"
+  code: "generic"
+  description: "Fallback parser for unknown formats - uses Claude to identify columns"
+  formats:
+    csv:
+      auto_detect: true
+      claude_assisted: true
+      prompt: |
+        Analyze this CSV header row and first 3 data rows.
+        Identify which columns contain:
+        - date (transaction date)
+        - description (transaction description or merchant)
+        - amount (transaction amount)
+        - reference (optional reference number)
+
+        Return JSON with column indices.
+
+# -----------------------------------------------------------------------------
+# Parsing Settings
+# -----------------------------------------------------------------------------
+parsing_settings:
+  # Amount parsing
+  decimal_separators: [".", ","]
+  thousand_separators: [",", " "]
+  currency_symbols: ["₱", "PHP", "P"]
+  negative_indicators: ["-", "(", "CR"]
+
+  # Date parsing fallbacks
+  date_formats_fallback:
+    - "%Y-%m-%d"
+    - "%d/%m/%Y"
+    - "%m/%d/%Y"
+    - "%d-%m-%Y"
+    - "%d-%b-%Y"
+    - "%b %d, %Y"
+
+  # Validation
+  require_valid_date: true
+  require_non_zero_amount: true
+  skip_pending_transactions: true
+  pending_indicators:
+    - "PENDING"
+    - "HOLD"
+    - "AUTHORIZATION"
+
+# -----------------------------------------------------------------------------
+# File Detection
+# -----------------------------------------------------------------------------
+file_detection:
+  # Detect bank from file content
+  detection_rules:
+    - bank: unionbank
+      patterns:
+        - "UnionBank"
+        - "UNIONBANK"
+        - "UBP"
+    - bank: bdo
+      patterns:
+        - "Banco de Oro"
+        - "BDO"
+        - "BDO Unibank"
+    - bank: gcash
+      patterns:
+        - "GCash"
+        - "GCASH"
+        - "G-Xchange"
+    - bank: metrobank
+      patterns:
+        - "Metrobank"
+        - "METROBANK"
+        - "MBTC"
+    - bank: bpi
+      patterns:
+        - "Bank of the Philippine Islands"
+        - "BPI"
