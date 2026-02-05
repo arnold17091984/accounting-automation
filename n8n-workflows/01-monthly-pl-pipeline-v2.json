@@ -1,0 +1,247 @@
+{
+  "name": "01 - Monthly P&L Pipeline v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Monthly Schedule (1st 9AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pl-pipeline",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-trigger",
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 500],
+      "webhookId": "pl-pipeline-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Initialize entities and period\nconst now = new Date();\nconst year = now.getFullYear();\nconst month = now.getMonth(); // Previous month (0-indexed)\nconst period = `${year}-${String(month).padStart(2, '0')}`;\n\nconst entities = [\n  { id: 'solaire', name: 'Solaire', qb_class: 'Solaire' },\n  { id: 'cod', name: 'COD', qb_class: 'COD' },\n  { id: 'royce', name: 'Royce Clark', qb_class: 'Royce Clark' },\n  { id: 'manila_junket', name: 'Manila Junket', qb_class: 'Manila Junket' },\n  { id: 'tours', name: 'Tours BGC/BSM', qb_class: 'Tours' },\n  { id: 'midori', name: 'Midori no Mart', qb_class: 'Midori' }\n];\n\nreturn entities.map(entity => ({\n  json: {\n    ...entity,\n    period,\n    year,\n    month\n  }\n}));"
+      },
+      "id": "init-entities",
+      "name": "Initialize Entities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [350, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  entity,\n  account_code,\n  account_name,\n  category,\n  SUM(amount) as total_amount,\n  COUNT(*) as transaction_count\nFROM transactions \nWHERE entity = '{{ $json.id }}'\n  AND EXTRACT(YEAR FROM txn_date) = {{ $json.year }}\n  AND EXTRACT(MONTH FROM txn_date) = {{ $json.month }}\nGROUP BY entity, account_code, account_name, category\nORDER BY category, account_code",
+        "options": {}
+      },
+      "id": "fetch-transactions",
+      "name": "Fetch Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [550, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate P&L summary for the entity\nconst entity = $('Initialize Entities').item.json;\nconst transactions = $input.all();\n\n// Group by category\nconst summary = {\n  entity: entity.name,\n  period: entity.period,\n  revenue: 0,\n  expenses: 0,\n  salaries: 0,\n  commissions: 0,\n  other_costs: 0,\n  details: []\n};\n\nfor (const txn of transactions) {\n  const data = txn.json;\n  const amount = parseFloat(data.total_amount) || 0;\n  \n  summary.details.push({\n    account_code: data.account_code,\n    account_name: data.account_name,\n    category: data.category,\n    amount: amount,\n    count: data.transaction_count\n  });\n  \n  switch(data.category) {\n    case 'revenue':\n      summary.revenue += amount;\n      break;\n    case 'expense':\n      summary.expenses += amount;\n      break;\n    case 'salary':\n      summary.salaries += amount;\n      break;\n    case 'commission':\n      summary.commissions += amount;\n      break;\n    default:\n      summary.other_costs += amount;\n  }\n}\n\nsummary.total_costs = summary.expenses + summary.salaries + summary.commissions + summary.other_costs;\nsummary.net_income = summary.revenue - summary.total_costs;\nsummary.profit_margin = summary.revenue > 0 ? ((summary.net_income / summary.revenue) * 100).toFixed(1) : 0;\n\nreturn [{ json: summary }];"
+      },
+      "id": "calculate-pl",
+      "name": "Calculate P&L",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all entity P&L summaries\nconst allSummaries = $input.all().map(item => item.json);\n\n// Calculate consolidated totals\nconst consolidated = {\n  period: allSummaries[0]?.period || 'N/A',\n  entities: allSummaries,\n  totals: {\n    revenue: 0,\n    expenses: 0,\n    salaries: 0,\n    commissions: 0,\n    other_costs: 0,\n    total_costs: 0,\n    net_income: 0\n  }\n};\n\nfor (const summary of allSummaries) {\n  consolidated.totals.revenue += summary.revenue || 0;\n  consolidated.totals.expenses += summary.expenses || 0;\n  consolidated.totals.salaries += summary.salaries || 0;\n  consolidated.totals.commissions += summary.commissions || 0;\n  consolidated.totals.other_costs += summary.other_costs || 0;\n  consolidated.totals.total_costs += summary.total_costs || 0;\n  consolidated.totals.net_income += summary.net_income || 0;\n}\n\nconsolidated.totals.profit_margin = consolidated.totals.revenue > 0 \n  ? ((consolidated.totals.net_income / consolidated.totals.revenue) * 100).toFixed(1) \n  : 0;\n\nreturn [{ json: consolidated }];"
+      },
+      "id": "consolidate-pl",
+      "name": "Consolidate P&L",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [950, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format P&L report for Telegram\nconst data = $input.first().json;\n\nconst formatCurrency = (amount) => {\n  return '₱' + Math.abs(amount).toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 });\n};\n\nconst formatLine = (label, amount, indent = '') => {\n  const sign = amount < 0 ? '-' : '';\n  return `${indent}${label}: ${sign}${formatCurrency(amount)}`;\n};\n\nlet report = `📊 *Monthly P&L Report*\\n`;\nreport += `Period: ${data.period}\\n`;\nreport += `Generated: ${new Date().toISOString().split('T')[0]}\\n`;\nreport += `\\n━━━━━━━━━━━━━━━━━━━━\\n`;\n\n// Entity summaries\nfor (const entity of data.entities) {\n  const icon = entity.net_income >= 0 ? '✅' : '⚠️';\n  report += `\\n${icon} *${entity.entity}*\\n`;\n  report += `   Revenue: ${formatCurrency(entity.revenue)}\\n`;\n  report += `   Costs: ${formatCurrency(entity.total_costs)}\\n`;\n  report += `   Net: ${formatCurrency(entity.net_income)} (${entity.profit_margin}%)\\n`;\n}\n\n// Consolidated totals\nreport += `\\n━━━━━━━━━━━━━━━━━━━━\\n`;\nreport += `\\n💰 *CONSOLIDATED TOTAL*\\n`;\nreport += `   Revenue: ${formatCurrency(data.totals.revenue)}\\n`;\nreport += `   Total Costs: ${formatCurrency(data.totals.total_costs)}\\n`;\nreport += `   • Expenses: ${formatCurrency(data.totals.expenses)}\\n`;\nreport += `   • Salaries: ${formatCurrency(data.totals.salaries)}\\n`;\nreport += `   • Commissions: ${formatCurrency(data.totals.commissions)}\\n`;\nreport += `   • Other: ${formatCurrency(data.totals.other_costs)}\\n`;\nreport += `\\n📈 *Net Income: ${formatCurrency(data.totals.net_income)}*\\n`;\nreport += `   Profit Margin: ${data.totals.profit_margin}%\\n`;\n\nreturn [{ json: { report, data } }];"
+      },
+      "id": "format-report",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1150, 400]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.report }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-send",
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1350, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (action, workflow, entity, details, status, created_at)\nVALUES (\n  'pl_report_generated',\n  '01-monthly-pl-pipeline',\n  'all',\n  '{{ JSON.stringify($json.data) }}'::jsonb,\n  'success',\n  NOW()\n)",
+        "options": {}
+      },
+      "id": "audit-log",
+      "name": "Write Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1550, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={\"status\": \"success\", \"message\": \"P&L report generated and sent to Telegram\"}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1750, 500]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "=❌ *P&L Pipeline Error*\n\nError: {{ $json.error.message }}\nTime: {{ new Date().toISOString() }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "error-telegram",
+      "name": "Error Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1350, 600]
+    }
+  ],
+  "connections": {
+    "Monthly Schedule (1st 9AM)": {
+      "main": [
+        [
+          {
+            "node": "Initialize Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Webhook": {
+      "main": [
+        [
+          {
+            "node": "Initialize Entities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Entities": {
+      "main": [
+        [
+          {
+            "node": "Fetch Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Transactions": {
+      "main": [
+        [
+          {
+            "node": "Calculate P&L",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate P&L": {
+      "main": [
+        [
+          {
+            "node": "Consolidate P&L",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidate P&L": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send to Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Telegram": {
+      "main": [
+        [
+          {
+            "node": "Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["monthly", "p&l", "report"]
+}
