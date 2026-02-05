@@ -1,0 +1,46 @@
+{
+  "name": "Simple Telegram Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"]
+      },
+      "id": "trigger-1",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "telegram-webhook-1"
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "=✅ メッセージを受信しました\n\nコマンド: {{ $json.message.text }}\n\n利用可能なコマンド:\n• /budget - 予算状況\n• /pl - P&Lサマリー\n• /status - システム状態\n• /help - ヘルプ",
+        "additionalFields": {}
+      },
+      "id": "telegram-send-1",
+      "name": "Telegram Send",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["telegram", "bot"]
+}
