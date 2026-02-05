@@ -1,0 +1,109 @@
+{
+  "name": "10 - Fund Request Generator v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 3,18 * *" }] }
+      },
+      "id": "schedule-trigger",
+      "name": "3rd & 18th 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fund-request",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-trigger",
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT description, amount, category FROM recurring_expenses WHERE is_active = true AND entity = 'tours' ORDER BY category, description",
+        "options": {}
+      },
+      "id": "get-recurring",
+      "name": "Get Recurring Expenses",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [350, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst today = new Date();\nconst paymentDay = today.getDate() <= 5 ? 5 : 20;\nconst paymentDate = new Date(today.getFullYear(), today.getMonth(), paymentDay);\n\n// Section A: Regular expenses\nconst sectionA = items.map((item, idx) => ({\n  line: idx + 1,\n  description: item.json.description,\n  amount: parseFloat(item.json.amount),\n  category: item.json.category\n}));\n\nconst sectionATotal = sectionA.reduce((sum, item) => sum + item.amount, 0);\n\n// Section B: Others (placeholder - would come from pending requests)\nconst sectionB = [];\nconst sectionBTotal = 0;\n\nconst overallTotal = sectionATotal + sectionBTotal;\n\nreturn [{\n  json: {\n    entity: 'Betrnk Tours',\n    requestDate: today.toISOString().split('T')[0],\n    paymentDate: paymentDate.toISOString().split('T')[0],\n    sectionA,\n    sectionATotal,\n    sectionB,\n    sectionBTotal,\n    overallTotal\n  }\n}];"
+      },
+      "id": "calculate-fund",
+      "name": "Calculate Fund Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [550, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst formatCurrency = (amount) => '₱' + amount.toLocaleString('en-PH', { minimumFractionDigits: 2 });\n\nlet msg = `💰 *FUND REQUEST*\\n`;\nmsg += `Entity: ${data.entity}\\n`;\nmsg += `Request Date: ${data.requestDate}\\n`;\nmsg += `Payment Date: ${data.paymentDate}\\n\\n`;\n\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n`;\nmsg += `*A. Regular Expenses*\\n\\n`;\n\nfor (const item of data.sectionA) {\n  msg += `${item.line}. ${item.description}\\n`;\n  msg += `   ${formatCurrency(item.amount)}\\n`;\n}\n\nmsg += `\\n*Section A Total: ${formatCurrency(data.sectionATotal)}*\\n\\n`;\n\nif (data.sectionB.length > 0) {\n  msg += `━━━━━━━━━━━━━━━━━━━━\\n`;\n  msg += `*B. Others*\\n\\n`;\n  for (const item of data.sectionB) {\n    msg += `${item.line}. ${item.description}\\n`;\n    msg += `   ${formatCurrency(item.amount)}\\n`;\n  }\n  msg += `\\n*Section B Total: ${formatCurrency(data.sectionBTotal)}*\\n\\n`;\n}\n\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n`;\nmsg += `\\n🔴 *OVERALL TOTAL: ${formatCurrency(data.overallTotal)}*`;\n\nreturn [{ json: { text: msg, data } }];"
+      },
+      "id": "format-request",
+      "name": "Format Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 400]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "{\"inline_keyboard\":[[{\"text\":\"✅ Approve\",\"callback_data\":\"fund_approve\"},{\"text\":\"❌ Reject\",\"callback_data\":\"fund_reject\"}]]}"
+        }
+      },
+      "id": "send-request",
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [950, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fund_requests (entity, request_date, payment_date, section_a_total, section_b_total, overall_total, status) VALUES ('tours', '{{ $json.data.requestDate }}'::date, '{{ $json.data.paymentDate }}'::date, {{ $json.data.sectionATotal }}, {{ $json.data.sectionBTotal }}, {{ $json.data.overallTotal }}, 'pending') RETURNING id",
+        "options": {}
+      },
+      "id": "save-request",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1150, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={\"status\": \"success\", \"message\": \"Fund request generated\", \"id\": {{ $json.id }}}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1350, 500]
+    }
+  ],
+  "connections": {
+    "3rd & 18th 9AM": { "main": [[{ "node": "Get Recurring Expenses", "type": "main", "index": 0 }]] },
+    "Manual Webhook": { "main": [[{ "node": "Get Recurring Expenses", "type": "main", "index": 0 }]] },
+    "Get Recurring Expenses": { "main": [[{ "node": "Calculate Fund Request", "type": "main", "index": 0 }]] },
+    "Calculate Fund Request": { "main": [[{ "node": "Format Request", "type": "main", "index": 0 }]] },
+    "Format Request": { "main": [[{ "node": "Send to Telegram", "type": "main", "index": 0 }]] },
+    "Send to Telegram": { "main": [[{ "node": "Save to Database", "type": "main", "index": 0 }]] },
+    "Save to Database": { "main": [[{ "node": "Webhook Response", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["fund-request", "scheduled"]
+}

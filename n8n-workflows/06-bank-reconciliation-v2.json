@@ -1,0 +1,57 @@
+{
+  "name": "06 - Bank Reconciliation v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 7 * * *" }] }
+      },
+      "id": "daily-trigger",
+      "name": "Daily 7AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT entity, SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_credits, SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_debits, COUNT(*) as txn_count FROM transactions WHERE txn_date = CURRENT_DATE - 1 GROUP BY entity",
+        "options": {}
+      },
+      "id": "get-transactions",
+      "name": "Get Yesterday Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst yesterday = new Date();\nyesterday.setDate(yesterday.getDate() - 1);\n\nif (items.length === 0) {\n  return [{ json: { text: `📊 *Bank Reconciliation*\\nDate: ${yesterday.toISOString().split('T')[0]}\\n\\nNo transactions recorded yesterday.` } }];\n}\n\nlet msg = `📊 *Bank Reconciliation Report*\\n`;\nmsg += `Date: ${yesterday.toISOString().split('T')[0]}\\n\\n`;\n\nlet totalCredits = 0, totalDebits = 0, totalTxns = 0;\n\nfor (const item of items) {\n  const d = item.json;\n  const credits = parseFloat(d.total_credits) || 0;\n  const debits = parseFloat(d.total_debits) || 0;\n  const net = credits - debits;\n  \n  totalCredits += credits;\n  totalDebits += debits;\n  totalTxns += parseInt(d.txn_count);\n  \n  msg += `*${d.entity}*\\n`;\n  msg += `  Credits: ₱${credits.toLocaleString()}\\n`;\n  msg += `  Debits: ₱${debits.toLocaleString()}\\n`;\n  msg += `  Net: ₱${net.toLocaleString()}\\n`;\n  msg += `  Transactions: ${d.txn_count}\\n\\n`;\n}\n\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n`;\nmsg += `*TOTAL*\\n`;\nmsg += `  Credits: ₱${totalCredits.toLocaleString()}\\n`;\nmsg += `  Debits: ₱${totalDebits.toLocaleString()}\\n`;\nmsg += `  Net: ₱${(totalCredits - totalDebits).toLocaleString()}\\n`;\nmsg += `  Transactions: ${totalTxns}`;\n\nreturn [{ json: { text: msg } }];"
+      },
+      "id": "format-recon",
+      "name": "Format Reconciliation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-recon",
+      "name": "Send Reconciliation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "Daily 7AM": { "main": [[{ "node": "Get Yesterday Transactions", "type": "main", "index": 0 }]] },
+    "Get Yesterday Transactions": { "main": [[{ "node": "Format Reconciliation", "type": "main", "index": 0 }]] },
+    "Format Reconciliation": { "main": [[{ "node": "Send Reconciliation", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["bank", "reconciliation", "daily"]
+}

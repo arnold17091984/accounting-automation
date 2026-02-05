@@ -1,0 +1,75 @@
+{
+  "name": "05 - Payroll Transfer v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 13,27 * *" }] }
+      },
+      "id": "schedule-trigger",
+      "name": "13th & 27th 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT employee_name, bank_name, account_number, amount FROM payroll WHERE entity = 'tours' AND status = 'pending' ORDER BY employee_name",
+        "options": {}
+      },
+      "id": "get-payroll",
+      "name": "Get Payroll Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst today = new Date();\nconst payDate = today.getDate() <= 15 ? 15 : 30;\n\nif (items.length === 0) {\n  return [{ json: { hasPayroll: false, message: 'No pending payroll entries.' } }];\n}\n\nlet totalAmount = 0;\nconst employees = items.map((item, idx) => {\n  const d = item.json;\n  totalAmount += parseFloat(d.amount);\n  return {\n    line: idx + 1,\n    name: d.employee_name,\n    bank: d.bank_name,\n    account: d.account_number,\n    amount: parseFloat(d.amount)\n  };\n});\n\nlet msg = `💵 *Payroll Transfer Template*\\n`;\nmsg += `Pay Date: ${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${payDate}\\n`;\nmsg += `Employees: ${employees.length}\\n\\n`;\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n\nfor (const emp of employees) {\n  msg += `${emp.line}. *${emp.name}*\\n`;\n  msg += `   Bank: ${emp.bank}\\n`;\n  msg += `   Account: ${emp.account}\\n`;\n  msg += `   Amount: ₱${emp.amount.toLocaleString()}\\n\\n`;\n}\n\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n`;\nmsg += `*TOTAL: ₱${totalAmount.toLocaleString()}*`;\n\nreturn [{ json: { hasPayroll: true, message: msg, totalAmount, employeeCount: employees.length } }];"
+      },
+      "id": "format-payroll",
+      "name": "Format Payroll",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.hasPayroll }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "has-payroll",
+      "name": "Has Payroll?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "{\"inline_keyboard\":[[{\"text\":\"✅ Confirm & Process\",\"callback_data\":\"payroll_confirm\"},{\"text\":\"❌ Cancel\",\"callback_data\":\"payroll_cancel\"}]]}"
+        }
+      },
+      "id": "send-payroll",
+      "name": "Send Payroll",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 200]
+    }
+  ],
+  "connections": {
+    "13th & 27th 9AM": { "main": [[{ "node": "Get Payroll Data", "type": "main", "index": 0 }]] },
+    "Get Payroll Data": { "main": [[{ "node": "Format Payroll", "type": "main", "index": 0 }]] },
+    "Format Payroll": { "main": [[{ "node": "Has Payroll?", "type": "main", "index": 0 }]] },
+    "Has Payroll?": { "main": [[{ "node": "Send Payroll", "type": "main", "index": 0 }], []] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["payroll", "transfer"]
+}

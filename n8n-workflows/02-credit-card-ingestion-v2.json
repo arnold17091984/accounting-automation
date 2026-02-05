@@ -1,0 +1,138 @@
+{
+  "name": "02 - Credit Card Ingestion v2",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"]
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.message.document }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-document",
+      "name": "Has Document?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "fileId": "={{ $json.message.document.file_id }}"
+      },
+      "id": "download-file",
+      "name": "Download File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse CSV file content\nconst fileData = $input.first().binary?.data;\nif (!fileData) {\n  throw new Error('No file data received');\n}\n\nconst content = Buffer.from(fileData.data, 'base64').toString('utf-8');\nconst lines = content.split('\\n').filter(line => line.trim());\n\nif (lines.length < 2) {\n  throw new Error('CSV file is empty or invalid');\n}\n\nconst headers = lines[0].split(',').map(h => h.trim().toLowerCase());\nconst transactions = [];\n\nfor (let i = 1; i < lines.length; i++) {\n  const values = lines[i].split(',');\n  const txn = {};\n  \n  headers.forEach((header, idx) => {\n    txn[header] = values[idx]?.trim() || '';\n  });\n  \n  // Standardize fields\n  transactions.push({\n    date: txn.date || txn.transaction_date || txn.txn_date || '',\n    description: txn.description || txn.merchant || txn.details || '',\n    amount: parseFloat(txn.amount || txn.debit || '0'),\n    reference: txn.reference || txn.ref_no || txn.reference_number || '',\n    raw: txn\n  });\n}\n\nreturn transactions.map(t => ({ json: t }));"
+      },
+      "id": "parse-csv",
+      "name": "Parse CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Categorize transaction based on merchant/description\nconst txn = $input.first().json;\n\n// Simple categorization rules\nconst categories = {\n  'grab': { account_code: '6230', account_name: 'Transportation', category: 'expense' },\n  'foodpanda': { account_code: '6210', account_name: 'Meals & Entertainment', category: 'expense' },\n  'jollibee': { account_code: '6210', account_name: 'Meals & Entertainment', category: 'expense' },\n  'mcdonalds': { account_code: '6210', account_name: 'Meals & Entertainment', category: 'expense' },\n  'starbucks': { account_code: '6210', account_name: 'Meals & Entertainment', category: 'expense' },\n  'lazada': { account_code: '6250', account_name: 'Office Supplies', category: 'expense' },\n  'shopee': { account_code: '6250', account_name: 'Office Supplies', category: 'expense' },\n  'meralco': { account_code: '6220', account_name: 'Utilities', category: 'expense' },\n  'pldt': { account_code: '6220', account_name: 'Utilities', category: 'expense' },\n  'globe': { account_code: '6220', account_name: 'Utilities', category: 'expense' },\n  'shell': { account_code: '6230', account_name: 'Transportation', category: 'expense' },\n  'petron': { account_code: '6230', account_name: 'Transportation', category: 'expense' },\n  'caltex': { account_code: '6230', account_name: 'Transportation', category: 'expense' }\n};\n\nconst description = txn.description.toLowerCase();\nlet matched = { account_code: '6290', account_name: 'Other Expenses', category: 'expense' };\n\nfor (const [keyword, cat] of Object.entries(categories)) {\n  if (description.includes(keyword)) {\n    matched = cat;\n    break;\n  }\n}\n\nreturn [{\n  json: {\n    ...txn,\n    ...matched,\n    classification_method: 'lookup',\n    classification_confidence: 0.9\n  }\n}];"
+      },
+      "id": "categorize",
+      "name": "Categorize Transaction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO transactions (source, source_bank, entity, txn_date, description, merchant, amount, account_code, account_name, category, classification_method, classification_confidence, raw_data)\nVALUES (\n  'credit_card',\n  'upload',\n  'tours',\n  '{{ $json.date }}'::date,\n  '{{ $json.description }}',\n  '{{ $json.description }}',\n  {{ $json.amount }},\n  '{{ $json.account_code }}',\n  '{{ $json.account_name }}',\n  '{{ $json.category }}',\n  '{{ $json.classification_method }}',\n  {{ $json.classification_confidence }},\n  '{{ JSON.stringify($json.raw) }}'::jsonb\n)\nRETURNING id",
+        "options": {}
+      },
+      "id": "save-transaction",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "=✅ *Credit Card Transaction Imported*\n\nDate: {{ $('Parse CSV').item.json.date }}\nDescription: {{ $('Parse CSV').item.json.description }}\nAmount: ₱{{ $('Parse CSV').item.json.amount.toLocaleString() }}\nCategory: {{ $json.account_name }}\n\nID: {{ $json.id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-confirm",
+      "name": "Send Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "=⚠️ Please upload a CSV file to process credit card transactions.\n\nSupported formats:\n• UnionBank CSV\n• BDO CSV\n• GCash CSV",
+        "additionalFields": {}
+      },
+      "id": "no-file-response",
+      "name": "No File Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [500, 400]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{ "node": "Has Document?", "type": "main", "index": 0 }]]
+    },
+    "Has Document?": {
+      "main": [
+        [{ "node": "Download File", "type": "main", "index": 0 }],
+        [{ "node": "No File Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download File": {
+      "main": [[{ "node": "Parse CSV", "type": "main", "index": 0 }]]
+    },
+    "Parse CSV": {
+      "main": [[{ "node": "Categorize Transaction", "type": "main", "index": 0 }]]
+    },
+    "Categorize Transaction": {
+      "main": [[{ "node": "Save to Database", "type": "main", "index": 0 }]]
+    },
+    "Save to Database": {
+      "main": [[{ "node": "Send Confirmation", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["credit-card", "ingestion"]
+}

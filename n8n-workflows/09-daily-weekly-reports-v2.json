@@ -1,0 +1,105 @@
+{
+  "name": "09 - Daily Weekly Reports v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "30 18 * * 1-5" }] }
+      },
+      "id": "daily-trigger",
+      "name": "Daily 6:30PM (Mon-Fri)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 200]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1" }] }
+      },
+      "id": "weekly-trigger",
+      "name": "Weekly Monday 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT entity, category, COUNT(*) as count, SUM(amount) as total FROM transactions WHERE txn_date = CURRENT_DATE GROUP BY entity, category ORDER BY entity, total DESC",
+        "options": {}
+      },
+      "id": "get-daily-data",
+      "name": "Get Daily Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [300, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT entity, category, COUNT(*) as count, SUM(amount) as total FROM transactions WHERE txn_date >= CURRENT_DATE - INTERVAL '7 days' GROUP BY entity, category ORDER BY entity, total DESC",
+        "options": {}
+      },
+      "id": "get-weekly-data",
+      "name": "Get Weekly Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [300, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst today = new Date().toISOString().split('T')[0];\n\nlet msg = `📅 *Daily Summary*\\nDate: ${today}\\n\\n`;\n\nif (items.length === 0) {\n  msg += 'No transactions recorded today.';\n} else {\n  const byEntity = {};\n  for (const item of items) {\n    const d = item.json;\n    if (!byEntity[d.entity]) byEntity[d.entity] = [];\n    byEntity[d.entity].push(d);\n  }\n  \n  for (const [entity, data] of Object.entries(byEntity)) {\n    msg += `*${entity}*\\n`;\n    let total = 0;\n    for (const d of data) {\n      msg += `  • ${d.category}: ₱${parseInt(d.total).toLocaleString()} (${d.count} txns)\\n`;\n      total += parseInt(d.total);\n    }\n    msg += `  Total: ₱${total.toLocaleString()}\\n\\n`;\n  }\n}\n\nreturn [{ json: { text: msg } }];"
+      },
+      "id": "format-daily",
+      "name": "Format Daily",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst today = new Date();\nconst weekAgo = new Date(today - 7 * 24 * 60 * 60 * 1000);\n\nlet msg = `📊 *Weekly Summary*\\n`;\nmsg += `Period: ${weekAgo.toISOString().split('T')[0]} to ${today.toISOString().split('T')[0]}\\n\\n`;\n\nif (items.length === 0) {\n  msg += 'No transactions recorded this week.';\n} else {\n  const byEntity = {};\n  let grandTotal = 0;\n  \n  for (const item of items) {\n    const d = item.json;\n    if (!byEntity[d.entity]) byEntity[d.entity] = { revenue: 0, expense: 0, count: 0 };\n    if (d.category === 'revenue') {\n      byEntity[d.entity].revenue += parseInt(d.total);\n    } else {\n      byEntity[d.entity].expense += parseInt(d.total);\n    }\n    byEntity[d.entity].count += parseInt(d.count);\n  }\n  \n  for (const [entity, data] of Object.entries(byEntity)) {\n    const net = data.revenue - data.expense;\n    const icon = net >= 0 ? '✅' : '⚠️';\n    msg += `${icon} *${entity}*\\n`;\n    msg += `   Revenue: ₱${data.revenue.toLocaleString()}\\n`;\n    msg += `   Expenses: ₱${data.expense.toLocaleString()}\\n`;\n    msg += `   Net: ₱${net.toLocaleString()}\\n`;\n    msg += `   Transactions: ${data.count}\\n\\n`;\n    grandTotal += net;\n  }\n  \n  msg += `━━━━━━━━━━━━━━\\n`;\n  msg += `*Weekly Net Total: ₱${grandTotal.toLocaleString()}*`;\n}\n\nreturn [{ json: { text: msg } }];"
+      },
+      "id": "format-weekly",
+      "name": "Format Weekly",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-daily",
+      "name": "Send Daily Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-weekly",
+      "name": "Send Weekly Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [700, 400]
+    }
+  ],
+  "connections": {
+    "Daily 6:30PM (Mon-Fri)": { "main": [[{ "node": "Get Daily Data", "type": "main", "index": 0 }]] },
+    "Weekly Monday 9AM": { "main": [[{ "node": "Get Weekly Data", "type": "main", "index": 0 }]] },
+    "Get Daily Data": { "main": [[{ "node": "Format Daily", "type": "main", "index": 0 }]] },
+    "Get Weekly Data": { "main": [[{ "node": "Format Weekly", "type": "main", "index": 0 }]] },
+    "Format Daily": { "main": [[{ "node": "Send Daily Report", "type": "main", "index": 0 }]] },
+    "Format Weekly": { "main": [[{ "node": "Send Weekly Report", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["daily", "weekly", "reports"]
+}

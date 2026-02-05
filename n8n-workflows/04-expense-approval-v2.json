@@ -1,0 +1,162 @@
+{
+  "name": "04 - Expense Approval v2",
+  "nodes": [
+    {
+      "parameters": { "updates": ["callback_query"] },
+      "id": "telegram-trigger",
+      "name": "Telegram Callback",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "expense-submit",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-trigger",
+      "name": "Expense Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse webhook expense submission\nconst body = $json.body || $json;\nreturn [{\n  json: {\n    type: 'new_expense',\n    entity: body.entity || 'tours',\n    description: body.description,\n    amount: parseFloat(body.amount),\n    category: body.category || 'expense',\n    submittedBy: body.submitted_by || 'system',\n    receiptUrl: body.receipt_url || null\n  }\n}];"
+      },
+      "id": "parse-expense",
+      "name": "Parse Expense",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.amount }}", "rightValue": 10000, "operator": { "type": "number", "operation": "lte" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "check-amount",
+      "name": "Under ₱10K?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO transactions (source, entity, txn_date, description, amount, category, approved, approved_by) VALUES ('expense_form', '{{ $json.entity }}', CURRENT_DATE, '{{ $json.description }}', {{ $json.amount }}, '{{ $json.category }}', true, 'auto_approved') RETURNING id",
+        "options": {}
+      },
+      "id": "auto-approve",
+      "name": "Auto Approve",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approval_log (request_type, amount, entity, status, notes) VALUES ('expense', {{ $json.amount }}, '{{ $json.entity }}', 'pending', '{{ $json.description }}') RETURNING id",
+        "options": {}
+      },
+      "id": "create-approval",
+      "name": "Create Approval",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 600]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "=✅ *Expense Auto-Approved*\\n\\nDescription: {{ $('Parse Expense').item.json.description }}\\nAmount: ₱{{ $('Parse Expense').item.json.amount.toLocaleString() }}\\nEntity: {{ $('Parse Expense').item.json.entity }}\\n\\nID: {{ $json.id }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "notify-auto",
+      "name": "Notify Auto Approve",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "=🔔 *Expense Approval Required*\\n\\nDescription: {{ $('Parse Expense').item.json.description }}\\nAmount: ₱{{ $('Parse Expense').item.json.amount.toLocaleString() }}\\nEntity: {{ $('Parse Expense').item.json.entity }}\\nSubmitted by: {{ $('Parse Expense').item.json.submittedBy }}\\n\\nApproval ID: {{ $json.id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "{\"inline_keyboard\":[[{\"text\":\"✅ Approve\",\"callback_data\":\"approve_{{ $json.id }}\"},{\"text\":\"❌ Reject\",\"callback_data\":\"reject_{{ $json.id }}\"}]]}"
+        }
+      },
+      "id": "request-approval",
+      "name": "Request Approval",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse callback data\nconst data = $json.callback_query?.data || '';\nconst [action, id] = data.split('_');\nconst userId = $json.callback_query?.from?.id;\nconst username = $json.callback_query?.from?.username;\n\nreturn [{\n  json: {\n    action,\n    approvalId: id,\n    approvedBy: username || userId,\n    chatId: $json.callback_query?.message?.chat?.id,\n    messageId: $json.callback_query?.message?.message_id\n  }\n}];"
+      },
+      "id": "parse-callback",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approval_log SET status = '{{ $json.action }}d', decided_by = '{{ $json.approvedBy }}', decided_at = NOW() WHERE id = {{ $json.approvalId }} RETURNING *",
+        "options": {}
+      },
+      "id": "update-approval",
+      "name": "Update Approval",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $('Parse Callback').item.json.chatId }}",
+        "text": "={{ $('Parse Callback').item.json.action === 'approve' ? '✅' : '❌' }} Expense {{ $('Parse Callback').item.json.action }}d by @{{ $('Parse Callback').item.json.approvedBy }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "confirm-action",
+      "name": "Confirm Action",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={\"status\": \"success\", \"message\": \"Expense submitted\"}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, 500]
+    }
+  ],
+  "connections": {
+    "Telegram Callback": { "main": [[{ "node": "Parse Callback", "type": "main", "index": 0 }]] },
+    "Expense Webhook": { "main": [[{ "node": "Parse Expense", "type": "main", "index": 0 }]] },
+    "Parse Expense": { "main": [[{ "node": "Under ₱10K?", "type": "main", "index": 0 }]] },
+    "Under ₱10K?": { "main": [[{ "node": "Auto Approve", "type": "main", "index": 0 }], [{ "node": "Create Approval", "type": "main", "index": 0 }]] },
+    "Auto Approve": { "main": [[{ "node": "Notify Auto Approve", "type": "main", "index": 0 }]] },
+    "Create Approval": { "main": [[{ "node": "Request Approval", "type": "main", "index": 0 }]] },
+    "Notify Auto Approve": { "main": [[{ "node": "Webhook Response", "type": "main", "index": 0 }]] },
+    "Request Approval": { "main": [[{ "node": "Webhook Response", "type": "main", "index": 0 }]] },
+    "Parse Callback": { "main": [[{ "node": "Update Approval", "type": "main", "index": 0 }]] },
+    "Update Approval": { "main": [[{ "node": "Confirm Action", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["expense", "approval"]
+}

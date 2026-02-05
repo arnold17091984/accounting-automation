@@ -1,0 +1,57 @@
+{
+  "name": "07 - Tax Filing Support v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 1 * *" }] }
+      },
+      "id": "monthly-trigger",
+      "name": "Monthly 1st 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT entity, SUM(CASE WHEN category = 'salary' THEN amount ELSE 0 END) as total_salaries, SUM(CASE WHEN category = 'commission' THEN amount ELSE 0 END) as total_commissions, SUM(amount) as total_expenses FROM transactions WHERE EXTRACT(YEAR FROM txn_date) = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month') AND EXTRACT(MONTH FROM txn_date) = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month') GROUP BY entity",
+        "options": {}
+      },
+      "id": "get-tax-data",
+      "name": "Get Previous Month Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst prevMonth = new Date();\nprevMonth.setMonth(prevMonth.getMonth() - 1);\nconst monthName = prevMonth.toLocaleString('en-US', { month: 'long', year: 'numeric' });\n\nlet msg = `🧾 *Tax Filing Reminder*\\n`;\nmsg += `Period: ${monthName}\\n\\n`;\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n\nlet totalWithholding = 0;\n\nfor (const item of items) {\n  const d = item.json;\n  const salaries = parseFloat(d.total_salaries) || 0;\n  const commissions = parseFloat(d.total_commissions) || 0;\n  \n  // Simplified withholding tax calculation (should use actual BIR rates)\n  const withholdingSalary = salaries * 0.10; // Simplified 10%\n  const withholdingCommission = commissions * 0.10;\n  const entityWithholding = withholdingSalary + withholdingCommission;\n  totalWithholding += entityWithholding;\n  \n  msg += `*${d.entity}*\\n`;\n  msg += `  Salaries: ₱${salaries.toLocaleString()}\\n`;\n  msg += `  Commissions: ₱${commissions.toLocaleString()}\\n`;\n  msg += `  Est. Withholding: ₱${entityWithholding.toLocaleString()}\\n\\n`;\n}\n\nmsg += `━━━━━━━━━━━━━━━━━━━━\\n`;\nmsg += `*Total Est. Withholding: ₱${totalWithholding.toLocaleString()}*\\n\\n`;\nmsg += `📅 *Deadlines*\\n`;\nmsg += `• 1601-C (Withholding): 10th of month\\n`;\nmsg += `• 1601-E (Expanded): 10th of month\\n`;\nmsg += `• 2550M (VAT): 20th of month`;\n\nreturn [{ json: { text: msg } }];"
+      },
+      "id": "calculate-tax",
+      "name": "Calculate Tax",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "-5195093277",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-tax",
+      "name": "Send Tax Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "Monthly 1st 9AM": { "main": [[{ "node": "Get Previous Month Data", "type": "main", "index": 0 }]] },
+    "Get Previous Month Data": { "main": [[{ "node": "Calculate Tax", "type": "main", "index": 0 }]] },
+    "Calculate Tax": { "main": [[{ "node": "Send Tax Reminder", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["tax", "bir", "monthly"]
+}

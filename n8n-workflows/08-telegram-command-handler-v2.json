@@ -1,0 +1,175 @@
+{
+  "name": "08 - Telegram Command Handler v2",
+  "nodes": [
+    {
+      "parameters": { "updates": ["message", "callback_query"] },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse incoming message\nconst msg = $json.message || $json.callback_query?.message;\nconst text = $json.message?.text || '';\nconst callbackData = $json.callback_query?.data || '';\nconst chatId = msg?.chat?.id || $json.callback_query?.from?.id;\nconst userId = $json.message?.from?.id || $json.callback_query?.from?.id;\nconst username = $json.message?.from?.username || $json.callback_query?.from?.username;\n\n// Determine command type\nlet command = '';\nlet args = [];\n\nif (text.startsWith('/')) {\n  const parts = text.split(' ');\n  command = parts[0].toLowerCase();\n  args = parts.slice(1);\n} else if (callbackData) {\n  command = 'callback';\n  args = callbackData.split('_');\n}\n\nreturn [{\n  json: {\n    chatId,\n    userId,\n    username,\n    command,\n    args,\n    rawText: text,\n    isCallback: !!callbackData\n  }\n}];"
+      },
+      "id": "parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            { "outputKey": "budget", "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/budget", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "pl", "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/pl", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "status", "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/status", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "help", "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/help", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "fallbackOutput": "extra"
+      },
+      "id": "route-command",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  b.entity,\n  SUM(b.budget_amount) as total_budget,\n  COALESCE(SUM(t.amount), 0) as total_actual,\n  ROUND((COALESCE(SUM(t.amount), 0) / NULLIF(SUM(b.budget_amount), 0)) * 100, 1) as usage_pct\nFROM budgets b\nLEFT JOIN transactions t ON t.entity = b.entity AND t.account_code = b.account_code\n  AND EXTRACT(YEAR FROM t.txn_date) = b.year AND EXTRACT(MONTH FROM t.txn_date) = b.month\nWHERE b.year = EXTRACT(YEAR FROM CURRENT_DATE) AND b.month = EXTRACT(MONTH FROM CURRENT_DATE)\nGROUP BY b.entity ORDER BY b.entity",
+        "options": {}
+      },
+      "id": "get-budget",
+      "name": "Get Budget Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst chatId = $('Parse Message').item.json.chatId;\n\nlet msg = '📊 *Budget Status*\\n';\nmsg += `Month: ${new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })}\\n\\n`;\n\nfor (const item of items) {\n  const d = item.json;\n  const icon = parseFloat(d.usage_pct) >= 100 ? '🔴' : parseFloat(d.usage_pct) >= 90 ? '🟡' : '🟢';\n  msg += `${icon} *${d.entity}*\\n`;\n  msg += `   Budget: ₱${parseInt(d.total_budget || 0).toLocaleString()}\\n`;\n  msg += `   Actual: ₱${parseInt(d.total_actual || 0).toLocaleString()} (${d.usage_pct || 0}%)\\n\\n`;\n}\n\nreturn [{ json: { chatId, text: msg } }];"
+      },
+      "id": "format-budget",
+      "name": "Format Budget",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-budget",
+      "name": "Send Budget",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = $('Parse Message').item.json.chatId;\nconst msg = `ℹ️ *Available Commands*\n\n/budget - View budget status\n/pl - View P&L summary\n/status - System status\n/help - Show this help\n\n📎 You can also upload CSV files to process credit card transactions.`;\n\nreturn [{ json: { chatId, text: msg } }];"
+      },
+      "id": "help-text",
+      "name": "Help Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = $('Parse Message').item.json.chatId;\nconst msg = `✅ *System Status*\n\nn8n: 🟢 Running\nPostgreSQL: 🟢 Connected\nTelegram Bot: 🟢 Active\n\nLast check: ${new Date().toISOString()}`;\n\nreturn [{ json: { chatId, text: msg } }];"
+      },
+      "id": "status-text",
+      "name": "Status Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 500]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-status",
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT entity, SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END) as revenue, SUM(CASE WHEN category != 'revenue' THEN amount ELSE 0 END) as expenses FROM transactions WHERE EXTRACT(YEAR FROM txn_date) = EXTRACT(YEAR FROM CURRENT_DATE) AND EXTRACT(MONTH FROM txn_date) = EXTRACT(MONTH FROM CURRENT_DATE) GROUP BY entity",
+        "options": {}
+      },
+      "id": "get-pl",
+      "name": "Get P&L Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst chatId = $('Parse Message').item.json.chatId;\n\nlet msg = '📈 *P&L Summary*\\n';\nmsg += `Month: ${new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })}\\n\\n`;\n\nlet totalRev = 0, totalExp = 0;\nfor (const item of items) {\n  const d = item.json;\n  const rev = parseInt(d.revenue || 0);\n  const exp = parseInt(d.expenses || 0);\n  const net = rev - exp;\n  totalRev += rev;\n  totalExp += exp;\n  const icon = net >= 0 ? '✅' : '⚠️';\n  msg += `${icon} *${d.entity}*\\n`;\n  msg += `   Rev: ₱${rev.toLocaleString()} | Exp: ₱${exp.toLocaleString()}\\n`;\n  msg += `   Net: ₱${net.toLocaleString()}\\n\\n`;\n}\n\nmsg += `━━━━━━━━━━━━━━\\n`;\nmsg += `*Total Net: ₱${(totalRev - totalExp).toLocaleString()}*`;\n\nreturn [{ json: { chatId, text: msg } }];"
+      },
+      "id": "format-pl",
+      "name": "Format P&L",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "send-pl",
+      "name": "Send P&L",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 200]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Parse Message", "type": "main", "index": 0 }]] },
+    "Parse Message": { "main": [[{ "node": "Route Command", "type": "main", "index": 0 }]] },
+    "Route Command": {
+      "budget": [[{ "node": "Get Budget Data", "type": "main", "index": 0 }]],
+      "pl": [[{ "node": "Get P&L Data", "type": "main", "index": 0 }]],
+      "status": [[{ "node": "Status Text", "type": "main", "index": 0 }]],
+      "help": [[{ "node": "Help Text", "type": "main", "index": 0 }]]
+    },
+    "Get Budget Data": { "main": [[{ "node": "Format Budget", "type": "main", "index": 0 }]] },
+    "Format Budget": { "main": [[{ "node": "Send Budget", "type": "main", "index": 0 }]] },
+    "Get P&L Data": { "main": [[{ "node": "Format P&L", "type": "main", "index": 0 }]] },
+    "Format P&L": { "main": [[{ "node": "Send P&L", "type": "main", "index": 0 }]] },
+    "Help Text": { "main": [[{ "node": "Send Help", "type": "main", "index": 0 }]] },
+    "Status Text": { "main": [[{ "node": "Send Status", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["telegram", "commands"]
+}
