@@ -217,7 +217,7 @@ commands:
 # Group Chat Settings
 # -----------------------------------------------------------------------------
 group_chats:
-  - chat_id: -1001234567890  # Replace with actual group chat ID
+  - chat_id: -5195093277
     name: "BK Accounting Team"
     type: main
     allow_commands: true
